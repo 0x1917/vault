@@ -183,6 +183,35 @@ func TestManifestToTarIndex(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "folder manifest entries are sorted by path",
+			m: dedup.Manifest{
+				Version: 1,
+				Item:    "appdata",
+				Files: map[string]dedup.ManifestEntry{
+					"z.txt":   {Mode: 0o644, ModTime: "2026-01-01T00:00:00Z", Size: 1, IsDir: false},
+					"a/b.txt": {Mode: 0o644, ModTime: "2026-01-01T00:00:00Z", Size: 2, IsDir: false},
+					"a.txt":   {Mode: 0o644, ModTime: "2026-01-01T00:00:00Z", Size: 3, IsDir: false},
+				},
+			},
+			getSub: func(dedup.ID) (dedup.Manifest, error) {
+				return dedup.Manifest{}, errors.New("should not be called")
+			},
+			check: func(t *testing.T, idx TarIndex, err error) {
+				if err != nil {
+					t.Fatalf("ManifestToTarIndex() error = %v", err)
+				}
+				want := []string{"a.txt", "a/b.txt", "z.txt"}
+				if len(idx.Files) != len(want) {
+					t.Fatalf("files len = %d, want %d", len(idx.Files), len(want))
+				}
+				for i, w := range want {
+					if idx.Files[i].Path != w {
+						t.Errorf("files[%d].Path = %q, want %q (got order %+v)", i, idx.Files[i].Path, w, idx.Files)
+					}
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

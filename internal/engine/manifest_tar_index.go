@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/ruaan-deysel/vault/internal/dedup"
@@ -57,6 +58,7 @@ func ManifestToTarIndex(itemName string, m dedup.Manifest, getSub func(dedup.ID)
 	if err := appendManifestFiles(&idx, m, "", getSub); err != nil {
 		return TarIndex{}, err
 	}
+	sort.Slice(idx.Files, func(i, j int) bool { return idx.Files[i].Path < idx.Files[j].Path })
 	return idx, nil
 }
 

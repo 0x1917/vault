@@ -17,36 +17,11 @@ import (
 
 	"github.com/ruaan-deysel/vault/internal/crypto"
 	"github.com/ruaan-deysel/vault/internal/db"
-	"github.com/ruaan-deysel/vault/internal/dedup"
 	"github.com/ruaan-deysel/vault/internal/engine"
 	"github.com/ruaan-deysel/vault/internal/runner"
 	"github.com/ruaan-deysel/vault/internal/scheduler"
 	"github.com/ruaan-deysel/vault/internal/storage"
 )
-
-// dedupManifestToTarIndex synthesizes a TarIndex-shaped response from a
-// dedup manifest so the restore wizard's file picker can render dedup
-// restore points using the same UI as classic tar-backed restore points.
-// The "archive" field is set to the item name (there is no single archive
-// in dedup mode — content lives in /_vault/packs/) so the picker still has
-// a label to show.
-func dedupManifestToTarIndex(itemName string, m dedup.Manifest) engine.TarIndex {
-	idx := engine.TarIndex{
-		Version: 1,
-		Archive: itemName,
-		Files:   make([]engine.TarIndexEntry, 0, len(m.Files)),
-	}
-	for p, e := range m.Files {
-		idx.Files = append(idx.Files, engine.TarIndexEntry{
-			Path:    p,
-			Size:    e.Size,
-			Mode:    fmt.Sprintf("%04o", e.Mode&0o7777),
-			ModTime: e.ModTime,
-			IsDir:   e.IsDir,
-		})
-	}
-	return idx
-}
 
 // ScheduleReloader is called after job CRUD to reload the cron scheduler.
 type ScheduleReloader = func() error
@@ -804,12 +779,12 @@ func (h *JobHandler) RestorePointContents(w http.ResponseWriter, r *http.Request
 	// no chain merge (and no resurrection, issue #231). Check before the
 	// chain branch so dedup increments browse as exactly their manifest.
 	if mID, isDedup := runner.ResolveItemManifestID(rp, itemName); isDedup {
-		manifest, err := h.runner.GetDedupManifest(dest, mID)
+		idx, err := h.runner.GetDedupTarIndex(dest, mID, itemName)
 		if err != nil {
 			respondInternalError(w, err)
 			return
 		}
-		respondJSON(w, http.StatusOK, dedupManifestToTarIndex(itemName, manifest))
+		respondJSON(w, http.StatusOK, idx)
 		return
 	}
 
@@ -985,11 +960,7 @@ func (h *JobHandler) respondMergedChainContents(w http.ResponseWriter, chain []d
 // .age sidecars with the configured passphrase).
 func (h *JobHandler) itemIndexForPoint(getAdapter func() (storage.Adapter, error), rp db.RestorePoint, dest db.StorageDestination, itemName, archiveName string) (engine.TarIndex, error) {
 	if mID, isDedup := runner.ResolveItemManifestID(rp, itemName); isDedup {
-		manifest, err := h.runner.GetDedupManifest(dest, mID)
-		if err != nil {
-			return engine.TarIndex{}, err
-		}
-		return dedupManifestToTarIndex(itemName, manifest), nil
+		return h.runner.GetDedupTarIndex(dest, mID, itemName)
 	}
 
 	adapter, err := getAdapter()

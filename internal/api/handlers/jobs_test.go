@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/ruaan-deysel/vault/internal/db"
-	"github.com/ruaan-deysel/vault/internal/dedup"
 	"github.com/ruaan-deysel/vault/internal/runner"
 	"github.com/ruaan-deysel/vault/internal/ws"
 )
@@ -169,95 +168,6 @@ type testError string
 
 func (e testError) Error() string { return string(e) }
 func errForTest(s string) error   { return testError(s) }
-
-// ---------------------------------------------------------------------------
-// dedupManifestToTarIndex
-// ---------------------------------------------------------------------------
-
-func TestDedupManifestToTarIndex_Empty(t *testing.T) {
-	m := dedup.Manifest{
-		Version: 1,
-		Item:    "test-item",
-		Files:   map[string]dedup.ManifestEntry{},
-	}
-	idx := dedupManifestToTarIndex("test-item", m)
-	if idx.Version != 1 {
-		t.Errorf("version = %d, want 1", idx.Version)
-	}
-	if idx.Archive != "test-item" {
-		t.Errorf("archive = %q, want %q", idx.Archive, "test-item")
-	}
-	if len(idx.Files) != 0 {
-		t.Errorf("files len = %d, want 0", len(idx.Files))
-	}
-}
-
-func TestDedupManifestToTarIndex_SingleFile(t *testing.T) {
-	m := dedup.Manifest{
-		Version: 1,
-		Item:    "mybackup",
-		Files: map[string]dedup.ManifestEntry{
-			"etc/hosts": {
-				Mode:    0o644,
-				ModTime: "2026-01-01T00:00:00Z",
-				Size:    256,
-				IsDir:   false,
-			},
-		},
-	}
-	idx := dedupManifestToTarIndex("mybackup", m)
-	if len(idx.Files) != 1 {
-		t.Fatalf("files len = %d, want 1", len(idx.Files))
-	}
-	f := idx.Files[0]
-	if f.Path != "etc/hosts" {
-		t.Errorf("path = %q, want %q", f.Path, "etc/hosts")
-	}
-	if f.Size != 256 {
-		t.Errorf("size = %d, want 256", f.Size)
-	}
-	if f.IsDir {
-		t.Error("IsDir should be false for regular file")
-	}
-	// Mode should be formatted as 4-digit octal.
-	if f.Mode != "0644" {
-		t.Errorf("mode = %q, want %q", f.Mode, "0644")
-	}
-}
-
-func TestDedupManifestToTarIndex_Directory(t *testing.T) {
-	m := dedup.Manifest{
-		Version: 1,
-		Item:    "volbackup",
-		Files: map[string]dedup.ManifestEntry{
-			"var/log/": {
-				Mode:  0o755,
-				IsDir: true,
-				Size:  0,
-			},
-		},
-	}
-	idx := dedupManifestToTarIndex("volbackup", m)
-	if len(idx.Files) != 1 {
-		t.Fatalf("want 1 entry, got %d", len(idx.Files))
-	}
-	if !idx.Files[0].IsDir {
-		t.Error("IsDir should be true for directory entry")
-	}
-}
-
-func TestDedupManifestToTarIndex_MultipleFiles(t *testing.T) {
-	files := map[string]dedup.ManifestEntry{
-		"a": {Size: 1},
-		"b": {Size: 2},
-		"c": {Size: 3},
-	}
-	m := dedup.Manifest{Version: 1, Item: "multi", Files: files}
-	idx := dedupManifestToTarIndex("multi", m)
-	if len(idx.Files) != 3 {
-		t.Errorf("files len = %d, want 3", len(idx.Files))
-	}
-}
 
 // ---------------------------------------------------------------------------
 // List

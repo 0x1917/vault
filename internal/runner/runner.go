@@ -1978,6 +1978,32 @@ func (r *Runner) GetDedupManifest(dest db.StorageDestination, manifestID dedup.I
 	return repo.GetManifest(manifestID)
 }
 
+// GetDedupTarIndex opens the dedup repo at dest and flattens the manifest for
+// manifestID into an engine.TarIndex for the restore file picker. Unlike
+// GetDedupManifest (which returns the raw top-level manifest), it recurses
+// into container __vol__ sub-manifests and drops synthetic/skipped entries so
+// container dedup restore points list real files with real sizes (issue #333).
+// Folder and plugin manifests flatten to their file entries unchanged.
+func (r *Runner) GetDedupTarIndex(dest db.StorageDestination, manifestID dedup.ID, itemName string) (engine.TarIndex, error) {
+	if !dest.DedupEnabled {
+		return engine.TarIndex{}, fmt.Errorf("destination %q is not dedup-enabled", dest.Name)
+	}
+	adapter, err := storage.NewAdapter(dest.Type, dest.Config)
+	if err != nil {
+		return engine.TarIndex{}, fmt.Errorf("adapter: %w", err)
+	}
+	defer storage.CloseAdapter(adapter)
+	repo, err := dedup.OpenRepo(r.db, adapter, dest.ID, r.serverKey)
+	if err != nil {
+		return engine.TarIndex{}, fmt.Errorf("open dedup repo: %w", err)
+	}
+	m, err := repo.GetManifest(manifestID)
+	if err != nil {
+		return engine.TarIndex{}, err
+	}
+	return engine.ManifestToTarIndex(itemName, m, repo.GetManifest)
+}
+
 // ResolveItemManifestID is the public counterpart of the private
 // resolveManifestID helper. Used by API handlers that need to detect
 // whether a (rp, item) pair is a dedup restore point and, if so, fetch its

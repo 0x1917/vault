@@ -97,46 +97,6 @@ func TestGetDedupStatsInitialisedEmpty(t *testing.T) {
 	}
 }
 
-// TestGetDedupManifestNonDedupRefuses covers the early-return when the
-// destination has dedup disabled.
-func TestGetDedupManifestNonDedupRefuses(t *testing.T) {
-	t.Parallel()
-	r, database, storageDir := setupTestRunner(t)
-	dest := createLocalDest(t, database, storageDir)
-
-	_, err := r.GetDedupManifest(dest, dedup.ID{})
-	if err == nil {
-		t.Fatal("GetDedupManifest on non-dedup destination should error")
-	}
-}
-
-// TestGetDedupManifestNotFound exercises the open-repo + lookup-missing
-// branch. Initialise the repo then query a manifest ID that doesn't exist.
-func TestGetDedupManifestNotFound(t *testing.T) {
-	t.Parallel()
-	r, database, storageDir := setupTestRunner(t)
-	r.serverKey = testServerKey()
-	dest := makeDedupDest(t, database, storageDir)
-
-	adapter, err := storage.NewAdapter(dest.Type, dest.Config)
-	if err != nil {
-		t.Fatalf("NewAdapter: %v", err)
-	}
-	if _, err := dedup.InitRepo(database, adapter, dest.ID, r.serverKey); err != nil {
-		t.Fatalf("InitRepo: %v", err)
-	}
-	storage.CloseAdapter(adapter)
-
-	var bogusID dedup.ID
-	for i := range bogusID {
-		bogusID[i] = 0xAB
-	}
-	_, err = r.GetDedupManifest(dest, bogusID)
-	if err == nil {
-		t.Fatal("GetDedupManifest for unknown ID should error")
-	}
-}
-
 // TestResolveItemManifestIDFromMetadata covers the multi-item dedup path
 // where the item-manifest mapping lives in metadata.
 func TestResolveItemManifestIDFromMetadata(t *testing.T) {

@@ -1957,30 +1957,8 @@ func (r *Runner) GetDedupStats(dest db.StorageDestination) (dedup.Stats, error) 
 	return repo.Stats(), nil
 }
 
-// GetDedupManifest opens the dedup repo at dest and returns the manifest
-// for the given manifest ID. Used by the RestorePointContents API handler
-// so the restore wizard's file picker can list files even for dedup
-// restore points (which don't have a tar index sidecar — chunks live in
-// /_vault/packs/ instead of per-item tar archives).
-func (r *Runner) GetDedupManifest(dest db.StorageDestination, manifestID dedup.ID) (dedup.Manifest, error) {
-	if !dest.DedupEnabled {
-		return dedup.Manifest{}, fmt.Errorf("destination %q is not dedup-enabled", dest.Name)
-	}
-	adapter, err := storage.NewAdapter(dest.Type, dest.Config)
-	if err != nil {
-		return dedup.Manifest{}, fmt.Errorf("adapter: %w", err)
-	}
-	defer storage.CloseAdapter(adapter)
-	repo, err := dedup.OpenRepo(r.db, adapter, dest.ID, r.serverKey)
-	if err != nil {
-		return dedup.Manifest{}, fmt.Errorf("open dedup repo: %w", err)
-	}
-	return repo.GetManifest(manifestID)
-}
-
 // GetDedupTarIndex opens the dedup repo at dest and flattens the manifest for
-// manifestID into an engine.TarIndex for the restore file picker. Unlike
-// GetDedupManifest (which returns the raw top-level manifest), it recurses
+// manifestID into an engine.TarIndex for the restore file picker. It recurses
 // into container __vol__ sub-manifests and drops synthetic/skipped entries so
 // container dedup restore points list real files with real sizes (issue #333).
 // Folder and plugin manifests flatten to their file entries unchanged.

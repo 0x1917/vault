@@ -1999,7 +1999,7 @@ func (r *Runner) GetDedupTarIndex(dest db.StorageDestination, manifestID dedup.I
 	}
 	m, err := repo.GetManifest(manifestID)
 	if err != nil {
-		return engine.TarIndex{}, err
+		return engine.TarIndex{}, fmt.Errorf("get manifest: %w", err)
 	}
 	return engine.ManifestToTarIndex(itemName, m, repo.GetManifest)
 }

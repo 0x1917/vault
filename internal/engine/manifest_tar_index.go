@@ -10,12 +10,12 @@ import (
 
 // IsSyntheticContainerKey reports whether key is one of the synthetic
 // bookkeeping keys the dedup/chunked container format stores alongside its
-// __vol__ volume entries (__inspect, __image_meta, __dbdump__). These are
-// never real files, so anything that lists a container manifest for display
-// (the restore file picker) must drop them.
+// __vol__ volume entries (__inspect, __image_meta, __dbdump__,
+// __dbdump_replay__). These are never real files, so anything that lists a
+// container manifest for display (the restore file picker) must drop them.
 func IsSyntheticContainerKey(key string) bool {
 	switch key {
-	case containerInspectKey, containerImageMetaKey, ContainerDBDumpKey:
+	case containerInspectKey, containerImageMetaKey, ContainerDBDumpKey, ContainerDBReplayKey:
 		return true
 	}
 	return false
@@ -43,8 +43,9 @@ func IsSkippedVolumeSize(size int64) bool {
 // ManifestToTarIndex flattens a dedup manifest into a TarIndex for the restore
 // file picker. Folder and plugin manifests map 1:1 (their Files keys are real
 // relative paths). Container manifests are identified by their synthetic keys:
-// bookkeeping entries (__inspect, __image_meta, __dbdump__) are dropped,
-// skipped/excluded volumes (Size == -1) are dropped, and each backed-up
+// bookkeeping entries (__inspect, __image_meta, __dbdump__,
+// __dbdump_replay__) are dropped, skipped/excluded volumes (Size == -1) are
+// dropped, and each backed-up
 // __vol__<dest> entry is recursed into via getSub so its real per-file paths
 // and sizes are listed, prefixed with the mount destination.
 func ManifestToTarIndex(itemName string, m dedup.Manifest, getSub func(dedup.ID) (dedup.Manifest, error)) (TarIndex, error) {

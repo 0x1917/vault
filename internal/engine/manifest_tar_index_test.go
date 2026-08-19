@@ -64,6 +64,7 @@ func TestIsSyntheticContainerKey(t *testing.T) {
 		{name: "inspect", key: "__inspect", want: true},
 		{name: "image meta", key: "__image_meta", want: true},
 		{name: "db dump", key: "__dbdump__", want: true},
+		{name: "db replay marker", key: "__dbdump_replay__", want: true},
 		{name: "volume key", key: "__vol__/data", want: false},
 		{name: "plain path", key: "data/foo", want: false},
 		{name: "bare volume prefix", key: "__vol__", want: false},

@@ -8,6 +8,7 @@ import (
 	"github.com/ruaan-deysel/vault/internal/crypto"
 	"github.com/ruaan-deysel/vault/internal/db"
 	"github.com/ruaan-deysel/vault/internal/dedup"
+	"github.com/ruaan-deysel/vault/internal/engine"
 	"github.com/ruaan-deysel/vault/internal/storage"
 )
 
@@ -357,75 +358,92 @@ func TestCollectLiveManifestIDsFromMetadataItemManifests(t *testing.T) {
 	}
 }
 
-// TestGetDedupTarIndexFlattensContainerManifest verifies the end-to-end
-// flatten of a container dedup manifest (issue #333): synthetic keys and
-// skipped volumes are dropped, and each __vol__ sub-manifest is recursed with
-// the mount destination as the path prefix.
-func TestGetDedupTarIndexFlattensContainerManifest(t *testing.T) {
-	t.Parallel()
-	r, database, storageDir := setupTestRunner(t)
-	r.serverKey = testServerKey()
-	dest := makeDedupDest(t, database, storageDir)
+// TestGetDedupTarIndex covers the restore file-picker flattening end-to-end:
+// container manifests are flattened to real per-file entries (synthetic keys
+// and skipped volumes dropped), and non-dedup destinations refuse (issue #333).
+func TestGetDedupTarIndex(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, r *Runner, database *db.DB, storageDir string) (db.StorageDestination, dedup.ID, string)
+		check func(t *testing.T, idx engine.TarIndex, err error)
+	}{
+		{
+			name: "flattens container manifest",
+			setup: func(t *testing.T, r *Runner, database *db.DB, storageDir string) (db.StorageDestination, dedup.ID, string) {
+				r.serverKey = testServerKey()
+				dest := makeDedupDest(t, database, storageDir)
 
-	adapter, err := storage.NewAdapter(dest.Type, dest.Config)
-	if err != nil {
-		t.Fatalf("NewAdapter: %v", err)
-	}
-	repo, err := dedup.InitRepo(database, adapter, dest.ID, r.serverKey)
-	if err != nil {
-		t.Fatalf("InitRepo: %v", err)
-	}
+				adapter, err := storage.NewAdapter(dest.Type, dest.Config)
+				if err != nil {
+					t.Fatalf("NewAdapter: %v", err)
+				}
+				repo, err := dedup.InitRepo(database, adapter, dest.ID, r.serverKey)
+				if err != nil {
+					t.Fatalf("InitRepo: %v", err)
+				}
 
-	subID, err := repo.PutManifest("data", dedup.Manifest{
-		Version: 1,
-		Item:    "data",
-		Files: map[string]dedup.ManifestEntry{
-			"app/config.yml": {Mode: 0o644, ModTime: "2026-01-01T00:00:00Z", Size: 128},
+				subID, err := repo.PutManifest("data", dedup.Manifest{
+					Version: 1,
+					Item:    "data",
+					Files: map[string]dedup.ManifestEntry{
+						"app/config.yml": {Mode: 0o644, ModTime: "2026-01-01T00:00:00Z", Size: 128},
+					},
+				})
+				if err != nil {
+					t.Fatalf("PutManifest (sub): %v", err)
+				}
+				topID, err := repo.PutManifest("plex", dedup.Manifest{
+					Version: 1,
+					Item:    "plex",
+					Files: map[string]dedup.ManifestEntry{
+						"__inspect":      {Size: 9000},
+						"__vol__/data":   {Size: 0, Chunks: []dedup.ID{subID}},
+						"__vol__/movies": {Size: -1},
+					},
+				})
+				if err != nil {
+					t.Fatalf("PutManifest (top): %v", err)
+				}
+				if err := repo.Flush(); err != nil {
+					t.Fatalf("Flush: %v", err)
+				}
+				storage.CloseAdapter(adapter)
+
+				return dest, topID, "plex"
+			},
+			check: func(t *testing.T, idx engine.TarIndex, err error) {
+				if err != nil {
+					t.Fatalf("GetDedupTarIndex: %v", err)
+				}
+				if idx.Archive != "plex" {
+					t.Errorf("archive = %q, want plex", idx.Archive)
+				}
+				if len(idx.Files) != 1 {
+					t.Fatalf("files len = %d, want 1; got %+v", len(idx.Files), idx.Files)
+				}
+				if idx.Files[0].Path != "/data/app/config.yml" || idx.Files[0].Size != 128 {
+					t.Errorf("file = %+v, want path /data/app/config.yml size 128", idx.Files[0])
+				}
+			},
 		},
-	})
-	if err != nil {
-		t.Fatalf("PutManifest (sub): %v", err)
-	}
-	topID, err := repo.PutManifest("plex", dedup.Manifest{
-		Version: 1,
-		Item:    "plex",
-		Files: map[string]dedup.ManifestEntry{
-			"__inspect":      {Size: 9000},
-			"__vol__/data":   {Size: 0, Chunks: []dedup.ID{subID}},
-			"__vol__/movies": {Size: -1},
+		{
+			name: "non-dedup destination refuses",
+			setup: func(t *testing.T, r *Runner, database *db.DB, storageDir string) (db.StorageDestination, dedup.ID, string) {
+				return createLocalDest(t, database, storageDir), dedup.ID{}, "item"
+			},
+			check: func(t *testing.T, idx engine.TarIndex, err error) {
+				if err == nil {
+					t.Fatal("GetDedupTarIndex on non-dedup destination should error")
+				}
+			},
 		},
-	})
-	if err != nil {
-		t.Fatalf("PutManifest (top): %v", err)
 	}
-	if err := repo.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	storage.CloseAdapter(adapter)
-
-	idx, err := r.GetDedupTarIndex(dest, topID, "plex")
-	if err != nil {
-		t.Fatalf("GetDedupTarIndex: %v", err)
-	}
-	if idx.Archive != "plex" {
-		t.Errorf("archive = %q, want plex", idx.Archive)
-	}
-	if len(idx.Files) != 1 {
-		t.Fatalf("files len = %d, want 1; got %+v", len(idx.Files), idx.Files)
-	}
-	if idx.Files[0].Path != "/data/app/config.yml" || idx.Files[0].Size != 128 {
-		t.Errorf("file = %+v, want path /data/app/config.yml size 128", idx.Files[0])
-	}
-}
-
-// TestGetDedupTarIndexNonDedupRefuses covers the early-return when the
-// destination has dedup disabled.
-func TestGetDedupTarIndexNonDedupRefuses(t *testing.T) {
-	t.Parallel()
-	r, database, storageDir := setupTestRunner(t)
-	dest := createLocalDest(t, database, storageDir) // dedup disabled
-
-	if _, err := r.GetDedupTarIndex(dest, dedup.ID{}, "item"); err == nil {
-		t.Fatal("GetDedupTarIndex on non-dedup destination should error")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, database, storageDir := setupTestRunner(t)
+			dest, manifestID, itemName := tt.setup(t, r, database, storageDir)
+			idx, err := r.GetDedupTarIndex(dest, manifestID, itemName)
+			tt.check(t, idx, err)
+		})
 	}
 }

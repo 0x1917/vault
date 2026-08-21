@@ -18,6 +18,12 @@ type AnnotatedRestorePoint struct {
 	MissingParentRestorePointID int64  `json:"missing_parent_restore_point_id,omitempty"`
 	RetentionPreserved          bool   `json:"retention_preserved,omitempty"`
 	RetentionPreservedFor       int    `json:"retention_preserved_for,omitempty"`
+	// BaseFullRestorePointID / BaseFullRestorePointAt identify the full
+	// backup at the root of this point's chain — the reference a
+	// differential/incremental restore is built on. Both stay zero/nil for
+	// a standalone full and for broken chains.
+	BaseFullRestorePointID int64      `json:"base_full_restore_point_id,omitempty"`
+	BaseFullRestorePointAt *time.Time `json:"base_full_restore_point_at,omitempty"`
 }
 
 // AnnotateRestorePoints enriches restore points with chain-health information
@@ -47,13 +53,18 @@ func annotateRestorePoints(job db.Job, points []db.RestorePoint, now time.Time) 
 
 	annotated := make([]AnnotatedRestorePoint, 0, len(points))
 	for _, rp := range points {
-		status, depth, missingParentID, warning := restorePointChainState(rp, byID)
+		status, depth, missingParentID, warning, baseFull := restorePointChainState(rp, byID)
 		entry := AnnotatedRestorePoint{
 			RestorePoint:                rp,
 			ChainStatus:                 status,
 			ChainDepth:                  depth,
 			ChainWarning:                warning,
 			MissingParentRestorePointID: missingParentID,
+		}
+		if depth > 1 && baseFull.ID > 0 {
+			entry.BaseFullRestorePointID = baseFull.ID
+			at := baseFull.CreatedAt
+			entry.BaseFullRestorePointAt = &at
 		}
 		if _, isProtected := protected[rp.ID]; isProtected {
 			if _, isDirectKeep := directKeep[rp.ID]; !isDirectKeep && dependencyCounts[rp.ID] > 0 {
@@ -133,9 +144,14 @@ func retainedDependencyCounts(points []db.RestorePoint, directKeep map[int64]str
 	return counts
 }
 
-func restorePointChainState(rp db.RestorePoint, byID map[int64]db.RestorePoint) (string, int, int64, string) {
+// restorePointChainState walks a restore point's parent chain and returns
+// (status, depth, missingParentID, warning, baseFull). baseFull is the
+// restore point at the root of the chain (the full backup a
+// differential/incremental restore is built on). For a standalone point it
+// is rp itself; for a broken chain it is the zero value.
+func restorePointChainState(rp db.RestorePoint, byID map[int64]db.RestorePoint) (string, int, int64, string, db.RestorePoint) {
 	if rp.ParentRestorePointID <= 0 {
-		return "standalone", 1, 0, ""
+		return "standalone", 1, 0, "", rp
 	}
 
 	depth := 1
@@ -145,15 +161,15 @@ func restorePointChainState(rp db.RestorePoint, byID map[int64]db.RestorePoint) 
 		depth++
 		parentID := current.ParentRestorePointID
 		if _, ok := seen[parentID]; ok {
-			return "broken", depth, parentID, fmt.Sprintf("Restore chain loops back to restore point #%d.", parentID)
+			return "broken", depth, parentID, fmt.Sprintf("Restore chain loops back to restore point #%d.", parentID), db.RestorePoint{}
 		}
 		parent, ok := byID[parentID]
 		if !ok {
-			return "broken", depth, parentID, fmt.Sprintf("Parent restore point #%d is missing. Restore from this point will fail until the chain is repaired.", parentID)
+			return "broken", depth, parentID, fmt.Sprintf("Parent restore point #%d is missing. Restore from this point will fail until the chain is repaired.", parentID), db.RestorePoint{}
 		}
 		seen[parentID] = struct{}{}
 		current = parent
 	}
 
-	return "healthy", depth, 0, ""
+	return "healthy", depth, 0, "", current
 }

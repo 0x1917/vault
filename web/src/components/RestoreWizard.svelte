@@ -675,6 +675,9 @@
         <div>
           <p class="text-sm font-medium text-info">Restore will replay the full chain</p>
           <p class="text-xs text-text-muted mt-0.5">This point depends on {chainDependencies(selectedPoint)} earlier backup{chainDependencies(selectedPoint) === 1 ? '' : 's'} and Vault will stage them before restoring.</p>
+          {#if selectedPoint?.base_full_restore_point_at}
+            <p class="text-xs text-text-muted mt-0.5">Reference point: full backup from {formatDate(selectedPoint.base_full_restore_point_at)} (#{selectedPoint.base_full_restore_point_id}).</p>
+          {/if}
         </div>
       </div>
     {/if}

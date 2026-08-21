@@ -70,6 +70,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **The Dashboard no longer contradicts itself on a fresh install.** The Protected tile reported "All items covered" in green beside a red 0-of-N bar while every item was still waiting for its first backup — the caption counted only items missing from every job, and an item queued but never yet backed up is in neither group. It now reads how many are pending. The Health tile likewise announced "Attention needed — recent backups have not completed" on a server where nothing had failed and nothing had yet finished; a score of zero with no runs at all now reads "No backups completed yet".
 
+- **Restore runs in History and on the Dashboard now report the size of the data actually restored, not the whole backup.** A partial restore — e.g. one container out of a multi-container backup — previously recorded the entire restore point's size, so a single small restore showed as hundreds of gigabytes. The recorded size now sums only the items that were restored, and the item counter reads like `1/1 containers` instead of `1/1 items`. Closes #334.
+
 ### Security
 
 - **Cleared a high-severity advisory in a build-time dependency and updated a bundled library.** `brace-expansion` in the web UI's dependency tree is updated to a patched release (denial of service via unbounded expansion), and `go.opentelemetry.io/otel` moves to 1.44.0 for an unbounded-header-length advisory. Neither is reachable from Vault's own code and no runtime behaviour changes. A full vulnerability scan of the Go module graph and the web dependency tree reports nothing else outstanding.

@@ -154,6 +154,7 @@ var FieldDocs = map[string]string{ // #nosec G101 -- values are human-readable d
 	"Job.CompressionLevel":    "Compression level trading time for size (fastest, default, better, best). Empty means the algorithm's default.",
 	"Job.Encryption":          "Encryption mode for the archive (e.g. none, passphrase).",
 	"Job.ContainerMode":       "How Docker containers are handled during backup (e.g. stop, pause, hot).",
+	"Job.ContainerScope":      "Which containers a job backs up: \"all\" (every live container, reconciled each run) or \"custom\" (only the explicitly selected containers).",
 	"Job.VMMode":              "How libvirt VMs are handled during backup (e.g. shutdown, snapshot).",
 	"Job.PreScript":           "Shell script run before the backup starts.",
 	"Job.PostScript":          "Shell script run after the backup completes.",

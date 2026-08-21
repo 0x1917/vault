@@ -63,3 +63,50 @@ func TestDecryptManifestEncryptedNoPassphrase(t *testing.T) {
 		t.Error("decryptManifest with empty passphrase should error")
 	}
 }
+
+func TestEncryptManifestEmptyPassphrase(t *testing.T) {
+	t.Parallel()
+	plain := []byte(`{"job_name":"no-encryption"}`)
+	got, err := encryptManifest(plain, "")
+	if err != nil {
+		t.Fatalf("encryptManifest error = %v", err)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Errorf("empty passphrase should return plaintext unchanged")
+	}
+}
+
+func TestEncryptManifestProducesCiphertext(t *testing.T) {
+	t.Parallel()
+	plain := []byte(`{"job_name":"secret-job","items":[{"name":"db"}]}`)
+	got, err := encryptManifest(plain, "hunter2")
+	if err != nil {
+		t.Fatalf("encryptManifest error = %v", err)
+	}
+	if !bytes.HasPrefix(got, []byte(ageHeaderPrefix)) {
+		head := got
+		if len(head) > 64 {
+			head = head[:64]
+		}
+		t.Errorf("ciphertext missing age header prefix; head=%q", head)
+	}
+	if bytes.Contains(got, []byte("secret-job")) {
+		t.Error("ciphertext leaks plaintext job name")
+	}
+}
+
+func TestEncryptManifestRoundTrip(t *testing.T) {
+	t.Parallel()
+	plain := []byte(`{"job_name":"round-trip","size_bytes":123}`)
+	cipher, err := encryptManifest(plain, "hunter2")
+	if err != nil {
+		t.Fatalf("encryptManifest: %v", err)
+	}
+	back, err := decryptManifest(cipher, "hunter2")
+	if err != nil {
+		t.Fatalf("decryptManifest: %v", err)
+	}
+	if !bytes.Equal(back, plain) {
+		t.Errorf("round-trip mismatch: got %q, want %q", back, plain)
+	}
+}

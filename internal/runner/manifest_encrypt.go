@@ -34,3 +34,19 @@ func decryptManifest(data []byte, passphrase string) ([]byte, error) {
 	defer dec.Close()
 	return io.ReadAll(dec)
 }
+
+// encryptManifest encrypts the marshalled manifest JSON using the same
+// passphrase that encrypts backup data (age with a scrypt recipient) and
+// returns the complete ciphertext. An empty passphrase returns the plaintext
+// unchanged so unencrypted jobs keep writing readable manifests.
+func encryptManifest(plaintext []byte, passphrase string) ([]byte, error) {
+	if passphrase == "" {
+		return plaintext, nil
+	}
+	enc, err := crypto.EncryptReader(passphrase, bytes.NewReader(plaintext))
+	if err != nil {
+		return nil, fmt.Errorf("encrypting manifest: %w", err)
+	}
+	defer enc.Close()
+	return io.ReadAll(enc)
+}

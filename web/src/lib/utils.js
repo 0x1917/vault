@@ -311,6 +311,36 @@ export function largestBackupsByJob(runs, nameByJob, limit = 5) {
     .slice(0, Math.max(0, limit))
 }
 
+/**
+ * Plural noun for a restore run's "X/Y <noun>" counter, derived from the
+ * per-item `type` recorded in the run's log. A restore run stores one log
+ * entry per restored item carrying its type, so a single-type restore reads
+ * "1/1 containers" instead of "1/1 items". Backup runs, mixed-type restores,
+ * and runs whose log cannot be parsed fall back to the generic "items".
+ */
+const RESTORE_TYPE_PLURALS = {
+  container: 'containers',
+  vm: 'VMs',
+  folder: 'folders',
+  plugin: 'plugins',
+  zfs: 'datasets',
+}
+
+export function restoreTypeNoun(run) {
+  if (!run || (run.run_type || 'backup') !== 'restore') return 'items'
+  const types = new Set()
+  try {
+    const items = JSON.parse(run.log || '[]')
+    if (Array.isArray(items)) {
+      for (const it of items) if (it.type) types.add(it.type)
+    }
+  } catch {
+    // non-JSON log → unknown type
+  }
+  const nouns = [...types].map((t) => RESTORE_TYPE_PLURALS[t]).filter(Boolean)
+  return nouns.length === 1 ? nouns[0] : 'items'
+}
+
 // Describes the outcome of a database location change for the Settings toast,
 // so the user is told whether the database actually moved rather than only
 // that the setting was saved. A `warning` means the move did not complete —

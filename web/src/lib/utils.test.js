@@ -16,6 +16,7 @@ import {
   relTimeUntil,
   prettyAnomalySummary,
   snapshotMigrationMessage,
+  restoreTypeNoun,
 } from './utils.js'
 
 describe('formatBytes', () => {
@@ -248,5 +249,29 @@ describe('snapshotMigrationMessage', () => {
     })
     expect(tone).toBe('error')
     expect(text).toBe('Database not migrated — the new copy could not be verified')
+  })
+})
+
+describe('restoreTypeNoun', () => {
+  it('labels a single-type container restore', () => {
+    expect(restoreTypeNoun({ run_type: 'restore', log: '[{"type":"container"}]' })).toBe('containers')
+  })
+  it('labels a plugin restore', () => {
+    expect(restoreTypeNoun({ run_type: 'restore', log: '[{"type":"plugin"},{"type":"plugin"}]' })).toBe('plugins')
+  })
+  it('labels VM and zfs restores', () => {
+    expect(restoreTypeNoun({ run_type: 'restore', log: '[{"type":"vm"}]' })).toBe('VMs')
+    expect(restoreTypeNoun({ run_type: 'restore', log: '[{"type":"zfs"}]' })).toBe('datasets')
+  })
+  it('falls back to items for mixed types', () => {
+    expect(restoreTypeNoun({ run_type: 'restore', log: '[{"type":"container"},{"type":"folder"}]' })).toBe('items')
+  })
+  it('falls back to items for backup runs', () => {
+    expect(restoreTypeNoun({ run_type: 'backup', log: '[{"type":"container"}]' })).toBe('items')
+  })
+  it('falls back to items without a parseable log', () => {
+    expect(restoreTypeNoun({ run_type: 'restore', log: '' })).toBe('items')
+    expect(restoreTypeNoun({ run_type: 'restore', log: 'not json' })).toBe('items')
+    expect(restoreTypeNoun({ run_type: 'restore' })).toBe('items')
   })
 })

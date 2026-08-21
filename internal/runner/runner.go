@@ -4641,6 +4641,14 @@ func (r *Runner) ScanStorageManifests(dest db.StorageDestination) ([]map[string]
 			if err != nil {
 				continue
 			}
+			// Transparently decrypt age-encrypted manifests (issue #325) with
+			// the configured passphrase. Plaintext (legacy/unencrypted)
+			// manifests pass through unchanged, so old backups still scan.
+			data, err = decryptManifest(data, r.resolvePassphrase())
+			if err != nil {
+				log.Printf("runner: scan: skipping %s: %v", manifestPath, err)
+				continue
+			}
 			var manifest map[string]any
 			if err := json.Unmarshal(data, &manifest); err != nil {
 				continue

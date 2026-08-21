@@ -167,3 +167,70 @@ func TestWriteManifestPlaintextWithoutPassphrase(t *testing.T) {
 		t.Errorf("job_name = %v, want plain-job", m["job_name"])
 	}
 }
+
+func TestScanStorageManifestsDecryptsEncrypted(t *testing.T) {
+	t.Parallel()
+	r, database, storageDir := setupTestRunner(t)
+	dest := createLocalDest(t, database, storageDir)
+	if err := database.SetSetting("encryption_passphrase", "hunter2"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	dir := filepath.Join(storageDir, "enc-job", "1_2026-01-15_020000")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plain := `{"version":2,"job_name":"enc-job","backup_type":"full","size_bytes":500}`
+	enc, err := crypto.EncryptReader("hunter2", strings.NewReader(plain))
+	if err != nil {
+		t.Fatalf("EncryptReader: %v", err)
+	}
+	cipher, err := io.ReadAll(enc)
+	_ = enc.Close()
+	if err != nil {
+		t.Fatalf("read ciphertext: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), cipher, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifests, err := r.ScanStorageManifests(dest)
+	if err != nil {
+		t.Fatalf("ScanStorageManifests: %v", err)
+	}
+	if len(manifests) != 1 {
+		t.Fatalf("got %d manifests, want 1", len(manifests))
+	}
+	if manifests[0]["job_name"] != "enc-job" {
+		t.Errorf("job_name = %v, want enc-job", manifests[0]["job_name"])
+	}
+	if sp, _ := manifests[0]["storage_path"].(string); sp == "" {
+		t.Error("storage_path missing")
+	}
+}
+
+func TestScanStorageManifestsSkipsEncryptedWithoutPassphrase(t *testing.T) {
+	t.Parallel()
+	r, database, storageDir := setupTestRunner(t)
+	dest := createLocalDest(t, database, storageDir)
+	// No encryption_passphrase setting — resolvePassphrase() returns "".
+
+	dir := filepath.Join(storageDir, "enc-job", "1_2026-01-15_020000")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	enc, _ := crypto.EncryptReader("hunter2", strings.NewReader(`{"version":2,"job_name":"enc-job","backup_type":"full"}`))
+	cipher, _ := io.ReadAll(enc)
+	_ = enc.Close()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), cipher, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifests, err := r.ScanStorageManifests(dest)
+	if err != nil {
+		t.Fatalf("ScanStorageManifests: %v", err)
+	}
+	if len(manifests) != 0 {
+		t.Fatalf("got %d manifests, want 0 (encrypted manifest must be skipped without a passphrase)", len(manifests))
+	}
+}

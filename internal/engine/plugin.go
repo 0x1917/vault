@@ -194,7 +194,8 @@ func (h *PluginHandler) Restore(ctx context.Context, item BackupItem, sourceDir 
 			return fmt.Errorf("creating config dir: %w", err)
 		}
 		include := extractRestoreFilePaths(item.Settings)
-		if err := untarDirectoryFiltered(ctx, configArchive, configDir, include); err != nil { // untarDirectoryFiltered inherits Zip Slip (CWE-22) protection via joinArchiveTarget + resolveWithinBase
+		exclude := extractRestoreExcludePaths(item.Settings)
+		if err := untarDirectoryFilteredEx(ctx, configArchive, configDir, include, exclude); err != nil { // untarDirectoryFilteredEx inherits Zip Slip (CWE-22) protection via joinArchiveTarget + resolveWithinBase
 			return fmt.Errorf("restoring plugin config: %w", err)
 		}
 	}

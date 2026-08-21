@@ -203,8 +203,9 @@ func (h *FolderHandler) Restore(ctx context.Context, item BackupItem, sourceDir 
 	// Partial-restore filter from the file-picker. nil = extract everything
 	// (the legacy whole-archive path).
 	include := extractRestoreFilePaths(item.Settings)
+	exclude := extractRestoreExcludePaths(item.Settings)
 
-	if err := untarDirectoryFiltered(ctx, archivePath, destPath, include); err != nil {
+	if err := untarDirectoryFilteredEx(ctx, archivePath, destPath, include, exclude); err != nil {
 		return fmt.Errorf("extracting to %s: %w", destPath, err)
 	}
 
@@ -392,10 +393,11 @@ func (h *FolderHandler) RestoreChunked(ctx context.Context, item BackupItem, rep
 	// set, only reconstruct the selected entries (and descendants of any
 	// selected directory) — mirroring untarDirectoryFiltered's semantics.
 	include := newIncludeSet(extractRestoreFilePaths(item.Settings))
+	exclude := newExcludeSet(extractRestoreExcludePaths(item.Settings))
 
 	var dirs, files []string
 	for p, e := range m.Files {
-		if !include.matches(p) {
+		if !include.matches(p) || exclude.matches(p) {
 			continue
 		}
 		if e.IsDir {

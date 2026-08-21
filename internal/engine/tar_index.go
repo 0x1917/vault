@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 )
 
 // TarIndex describes the contents of a tar archive (plain or compressed) for
@@ -122,4 +124,69 @@ func baseName(p string) string {
 		}
 	}
 	return p
+}
+
+// TarIndexDir is the lazy, per-directory view of a TarIndex served by the
+// restore wizard's file tree. Entries are the immediate children of Dir;
+// TotalFiles/TotalDirs are recursive counts across the whole index so the UI
+// can show "Restoring all N files" without transferring the full list.
+type TarIndexDir struct {
+	Dir        string          `json:"dir"`
+	Entries    []TarIndexEntry `json:"entries"`
+	TotalFiles int             `json:"total_files"`
+	TotalDirs  int             `json:"total_dirs"`
+}
+
+// normalizeIndexPath trims leading/trailing slashes and maps backslashes to
+// forward slashes so dedup manifest paths ("config/app.yml") and tar header
+// names ("/etc/conf/") group identically.
+func normalizeIndexPath(p string) string {
+	return strings.Trim(strings.ReplaceAll(p, "\\", "/"), "/")
+}
+
+// parentIndexPath returns the parent directory of a normalized index path,
+// or "" for a top-level entry.
+func parentIndexPath(p string) string {
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[:i]
+	}
+	return ""
+}
+
+// DirChildren returns the immediate children of dir ("" or "." means the
+// archive root), sorted directories-first then by path.
+func (idx TarIndex) DirChildren(dir string) []TarIndexEntry {
+	dir = normalizeIndexPath(dir)
+	if dir == "." {
+		dir = ""
+	}
+	out := make([]TarIndexEntry, 0)
+	for _, f := range idx.Files {
+		p := normalizeIndexPath(f.Path)
+		if p == "" {
+			continue
+		}
+		if parentIndexPath(p) == dir {
+			out = append(out, f)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IsDir != out[j].IsDir {
+			return out[i].IsDir
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out
+}
+
+// Counts returns the total number of files and directories in the index.
+func (idx TarIndex) Counts() (files, dirs int) {
+	for _, f := range idx.Files {
+		if f.IsDir {
+			dirs++
+		} else {
+			files++
+		}
+	}
+	return files, dirs
 }

@@ -138,6 +138,58 @@ func TestReadTarIndex_VersionMismatch(t *testing.T) {
 	}
 }
 
+func TestTarIndex_DirChildren(t *testing.T) {
+	idx := TarIndex{Files: []TarIndexEntry{
+		{Path: "b.txt", Size: 1, IsDir: false},
+		{Path: "a", IsDir: true},
+		{Path: "a/c.txt", Size: 2, IsDir: false},
+		{Path: "a/sub/d.txt", Size: 3, IsDir: false},
+		{Path: "a/sub", IsDir: true},
+	}}
+
+	root := idx.DirChildren("")
+	if len(root) != 2 {
+		t.Fatalf("root children = %d, want 2", len(root))
+	}
+	if root[0].Path != "a" || !root[0].IsDir {
+		t.Errorf("first root child should be dir 'a', got %+v", root[0])
+	}
+	if root[1].Path != "b.txt" {
+		t.Errorf("second root child should be 'b.txt', got %+v", root[1])
+	}
+
+	sub := idx.DirChildren("a")
+	if len(sub) != 2 {
+		t.Fatalf("'a' children = %d, want 2", len(sub))
+	}
+	// Directories sort before files within a level.
+	if sub[0].Path != "a/sub" || !sub[0].IsDir {
+		t.Errorf("first 'a' child should be dir 'a/sub', got %+v", sub[0])
+	}
+	if sub[1].Path != "a/c.txt" {
+		t.Errorf("second 'a' child should be 'a/c.txt', got %+v", sub[1])
+	}
+
+	// Leading slashes and backslashes normalize: "/etc\\conf.txt" groups under "etc".
+	norm := TarIndex{Files: []TarIndexEntry{{Path: "/etc\\conf.txt"}}}
+	if got := norm.DirChildren("etc"); len(got) != 1 {
+		t.Errorf("normalized child of 'etc' should be found, got %d", len(got))
+	}
+}
+
+func TestTarIndex_Counts(t *testing.T) {
+	idx := TarIndex{Files: []TarIndexEntry{
+		{Path: "a", IsDir: true},
+		{Path: "a/x", IsDir: true},
+		{Path: "a/x/f.txt", IsDir: false},
+		{Path: "b.txt", IsDir: false},
+	}}
+	files, dirs := idx.Counts()
+	if files != 2 || dirs != 2 {
+		t.Errorf("Counts() = (%d, %d), want (2, 2)", files, dirs)
+	}
+}
+
 func TestWriteTarIndex_EmptyTar(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "empty.tar")

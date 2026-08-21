@@ -12,7 +12,7 @@ func TestRestoreStagedItem_UnknownType(t *testing.T) {
 	r, _ := newTestRunner(t)
 	err := r.restoreStagedItem(
 		context.Background(), 1, "noname", "weird-unknown-type",
-		"", t.TempDir(), nil,
+		"", t.TempDir(), nil, nil,
 		restoreProgressReporter{}, 0, 100,
 	)
 	if err == nil {
@@ -27,7 +27,7 @@ func TestRestoreStagedItem_VMHandlerError(t *testing.T) {
 	r, _ := newTestRunner(t)
 	err := r.restoreStagedItem(
 		context.Background(), 1, "any", "vm",
-		"", t.TempDir(), nil,
+		"", t.TempDir(), nil, nil,
 		restoreProgressReporter{}, 0, 100,
 	)
 	if err == nil {
@@ -42,7 +42,7 @@ func TestRestoreStagedItem_PluginHandlerError(t *testing.T) {
 	r, _ := newTestRunner(t)
 	err := r.restoreStagedItem(
 		context.Background(), 1, "any", "plugin",
-		"", t.TempDir(), nil,
+		"", t.TempDir(), nil, nil,
 		restoreProgressReporter{}, 0, 100,
 	)
 	if err == nil {
@@ -56,7 +56,7 @@ func TestRestoreStagedItem_ZFSHandlerError(t *testing.T) {
 	r, _ := newTestRunner(t)
 	err := r.restoreStagedItem(
 		context.Background(), 1, "any", "zfs",
-		"", t.TempDir(), nil,
+		"", t.TempDir(), nil, nil,
 		restoreProgressReporter{}, 0, 100,
 	)
 	if err == nil {
@@ -74,7 +74,7 @@ func TestRestoreStagedItem_FolderHappyPath(t *testing.T) {
 	r, _ := newTestRunner(t)
 	err := r.restoreStagedItem(
 		context.Background(), 1, "Test Folder", "folder",
-		t.TempDir(), t.TempDir(), nil,
+		t.TempDir(), t.TempDir(), nil, nil,
 		restoreProgressReporter{}, 0, 100,
 	)
 	// The inner Restore call errors because tmpDir has no archive. But

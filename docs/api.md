@@ -29,7 +29,7 @@ Loopback requests (`127.0.0.1` and `::1`) are always exempt from API key validat
 
 ## Jobs
 
-The job payload's `backup_type_chain` field accepts `full`, `incremental`, or `differential`. Incremental and differential jobs automatically run as a **full** backup on their first run (when the job has no previous restore point to attach to); later runs capture only changes.
+The job payload's `backup_type_chain` field accepts `full`, `incremental`, or `differential`. Incremental and differential jobs automatically run as a **full** backup on their first run (when the job has no previous restore point to attach to); later runs capture only changes. Incremental and differential jobs may also set `full_schedule` (a cron expression, like `schedule`) to run a recurring full backup on its own cadence; empty means disabled and is the only valid value for `full` jobs.
 
 | Method | Endpoint                                           | Description                                                                    |
 | ------ | -------------------------------------------------- | ------------------------------------------------------------------------------ |

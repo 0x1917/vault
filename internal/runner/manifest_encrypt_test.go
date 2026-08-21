@@ -2,11 +2,16 @@ package runner
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ruaan-deysel/vault/internal/crypto"
+	"github.com/ruaan-deysel/vault/internal/db"
 )
 
 func TestDecryptManifestPlaintextPassthrough(t *testing.T) {
@@ -108,5 +113,57 @@ func TestEncryptManifestRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(back, plain) {
 		t.Errorf("round-trip mismatch: got %q, want %q", back, plain)
+	}
+}
+
+func TestWriteManifestEncryptsWithPassphrase(t *testing.T) {
+	t.Parallel()
+	r, database, storageDir := setupTestRunner(t)
+	dest := createLocalDest(t, database, storageDir)
+	if err := database.SetSetting("encryption_passphrase", "hunter2"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	job := db.Job{Name: "enc-job", Encryption: "age", Compression: "zstd"}
+	basePath := "enc-job/1_2026-01-15_020000"
+
+	r.writeManifest(context.Background(), dest, basePath, job, nil, 1, "full", 1, 0, 500, nil, nil, "2026-01-15_020000", "hunter2")
+
+	raw, err := os.ReadFile(filepath.Join(storageDir, basePath, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest.json: %v", err)
+	}
+	if !bytes.HasPrefix(raw, []byte(ageHeaderPrefix)) {
+		head := raw
+		if len(head) > 64 {
+			head = head[:64]
+		}
+		t.Fatalf("manifest.json is not age-encrypted; head=%q", head)
+	}
+	if bytes.Contains(raw, []byte("enc-job")) {
+		t.Error("encrypted manifest leaks job name")
+	}
+}
+
+func TestWriteManifestPlaintextWithoutPassphrase(t *testing.T) {
+	t.Parallel()
+	r, database, storageDir := setupTestRunner(t)
+	dest := createLocalDest(t, database, storageDir)
+
+	job := db.Job{Name: "plain-job", Encryption: "", Compression: "zstd"}
+	basePath := "plain-job/1_2026-01-15_020000"
+
+	r.writeManifest(context.Background(), dest, basePath, job, nil, 1, "full", 1, 0, 500, nil, nil, "2026-01-15_020000", "")
+
+	raw, err := os.ReadFile(filepath.Join(storageDir, basePath, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest.json: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("manifest.json should be plaintext JSON: %v", err)
+	}
+	if m["job_name"] != "plain-job" {
+		t.Errorf("job_name = %v, want plain-job", m["job_name"])
 	}
 }

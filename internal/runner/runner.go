@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -1777,7 +1778,7 @@ func (r *Runner) runJobInternal(jobID int64, opts runOptions) {
 		// write only degrades out-of-band recovery, not normal DB-driven restore.
 		manifestDest := dest // stable copy for closure
 		r.runFinalizationStep("manifest", jobID, runID, finalizeManifestTimeout, func(stepCtx context.Context) {
-			r.writeManifest(stepCtx, manifestDest, basePath, job, items, runID, btResult.BackupType, itemsDone, itemsFailed, totalSize, itemChecksums, itemManifests, timestamp)
+			r.writeManifest(stepCtx, manifestDest, basePath, job, items, runID, btResult.BackupType, itemsDone, itemsFailed, totalSize, itemChecksums, itemManifests, timestamp, encryptPassphrase)
 		})
 
 		// Auto-backup the SQLite database to a centralised storage location.
@@ -4094,7 +4095,7 @@ func (r *Runner) ResolvePassphrase() string {
 // destination has dedup enabled; pass nil/empty for non-dedup jobs. Without
 // it, restoring an imported dedup backup on another instance can't resolve
 // chunks because the manifest-ID linkage lives only in the local DB.
-func (r *Runner) writeManifest(ctx context.Context, dest db.StorageDestination, basePath string, job db.Job, items []db.JobItem, runID int64, backupType string, itemsDone, itemsFailed int, totalSize int64, itemChecksums map[string]map[string]string, itemManifests map[string]string, timestamp string) {
+func (r *Runner) writeManifest(ctx context.Context, dest db.StorageDestination, basePath string, job db.Job, items []db.JobItem, runID int64, backupType string, itemsDone, itemsFailed int, totalSize int64, itemChecksums map[string]map[string]string, itemManifests map[string]string, timestamp string, passphrase string) {
 	// Serialize items so a future import can recreate JobItems with the
 	// correct type, name, and per-item settings (e.g. folder path,
 	// container exclude_paths, ZFS dataset). Without this, importing a
@@ -4149,6 +4150,16 @@ func (r *Runner) writeManifest(ctx context.Context, dest db.StorageDestination, 
 		return
 	}
 
+	// Encrypt the manifest with the same passphrase that encrypts backup data
+	// (issue #325). Manifest metadata — item names, paths, settings, checksums
+	// — is sensitive, and manifests can live on third-party storage; a
+	// plaintext manifest leaks it even when the job itself is encrypted.
+	payload, err := encryptManifest(data, passphrase)
+	if err != nil {
+		log.Printf("runner: failed to encrypt manifest: %v", err)
+		return
+	}
+
 	adapter, err := storage.NewAdapter(dest.Type, dest.Config)
 	if err != nil {
 		log.Printf("runner: failed to create adapter for manifest: %v", err)
@@ -4161,7 +4172,7 @@ func (r *Runner) writeManifest(ctx context.Context, dest db.StorageDestination, 
 	defer stopOnCancel()
 
 	manifestPath := filepath.Join(basePath, "manifest.json")
-	if err := adapter.Write(manifestPath, strings.NewReader(string(data))); err != nil {
+	if err := adapter.Write(manifestPath, bytes.NewReader(payload)); err != nil {
 		log.Printf("runner: failed to write manifest to %s: %v", manifestPath, err)
 	}
 }

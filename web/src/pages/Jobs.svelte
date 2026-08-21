@@ -7,6 +7,7 @@
   import { onWsMessage } from '../lib/ws.svelte.js'
   import { getProgress, handleProgressMessage, restoreFromStatus } from '../lib/progress.svelte.js'
   import { describeSchedule, relTimeUntil } from '../lib/utils.js'
+  import { effectiveFullSchedule } from '../lib/job-schedule.js'
   import Modal from '../components/Modal.svelte'
   import Toast from '../components/Toast.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -16,6 +17,7 @@
   import { getAnomalyEnabled } from '../lib/settings.svelte.js'
   import ItemPicker from '../components/ItemPicker.svelte'
   import ScheduleBuilder from '../components/ScheduleBuilder.svelte'
+  import FullBackupSchedule from '../components/FullBackupSchedule.svelte'
   import BackupModeSelector from '../components/BackupModeSelector.svelte'
   import ScriptBrowser from '../components/ScriptBrowser.svelte'
   import TypePicker from '../components/TypePicker.svelte'
@@ -253,6 +255,7 @@
       description: '',
       enabled: true,
       schedule: '0 2 * * *',
+      full_schedule: '',
       backup_type_chain: 'full',
       retention_count: 5,
       retention_days: 30,
@@ -589,6 +592,7 @@
         description: data.job.description || '',
         enabled: data.job.enabled ?? true,
         schedule: data.job.schedule || '0 2 * * *',
+        full_schedule: data.job.full_schedule || '',
         backup_type_chain: data.job.backup_type_chain || 'full',
         retention_count: data.job.retention_count || 5,
         retention_days: data.job.retention_days || 30,
@@ -645,6 +649,7 @@
     try {
       const payload = { ...form }
       delete payload.selectedTypes
+      payload.full_schedule = effectiveFullSchedule(payload.backup_type_chain, payload.full_schedule)
       // Normalise retry overrides: blank → null so the backend falls back
       // to the global default; otherwise coerce the max to an int and pass
       // the delays JSON through verbatim (already validated above).
@@ -1430,6 +1435,7 @@
               <p class="text-xs text-text-dim mt-1">The first run is automatically a full backup; later runs capture only changes.</p>
             {/if}
           </div>
+          <FullBackupSchedule bind:fullSchedule={form.full_schedule} backupTypeChain={form.backup_type_chain} />
           <div>
             <label for="ex_compression" class="block text-sm font-medium text-text-muted mb-1.5">Compression</label>
             <select id="ex_compression" bind:value={form.compression}
@@ -1550,6 +1556,9 @@
             {#if vmDiskFormatRestriction}
               <p class="text-xs text-warning mt-1">Incremental and differential backups require qcow2 disks. {incrementalBlockedSummary} don't, so only Full is available.</p>
             {/if}
+          </div>
+          <div>
+            <FullBackupSchedule bind:fullSchedule={form.full_schedule} backupTypeChain={form.backup_type_chain} />
           </div>
           <div>
             <label for="compression" class="block text-sm font-medium text-text-muted mb-1.5">Compression</label>

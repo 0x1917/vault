@@ -7,6 +7,7 @@
   import PathBrowser from './PathBrowser.svelte'
   import Spinner from './Spinner.svelte'
   import RestorePointTimeline from './RestorePointTimeline.svelte'
+  import { basename, summaryLabel, flattenVisibleTree } from '../lib/file-tree.js'
 
   let { jobs = [], onrestore = () => {}, initialJobId = null, initialType = null, initialName = null } = $props()
 
@@ -62,16 +63,23 @@
     }
   }
 
-  // Partial-restore file picker (Feature B).
-  // Per-item map: itemName -> { contents: TarIndex|null, selected: SvelteSet<string>,
-  //                              loading: boolean, error: string, search: string, open: boolean }
+  // Partial-restore file tree (issue #323). Per-item map:
+  //   itemName -> { roots, listings, expanded, excluded, totalFiles, totalDirs,
+  //                 loading, error, search, open }
+  // `excluded` holds paths the user has UNchecked (default: everything is
+  // selected and will restore). `listings` caches each directory's children
+  // as they are lazily loaded from the backend.
   let picker = $state(new SvelteMap())
 
   function ensurePickerEntry(itemName) {
     if (!picker.has(itemName)) {
       picker.set(itemName, {
-        contents: null,
-        selected: new SvelteSet(),
+        roots: [],
+        listings: {},
+        expanded: new SvelteSet(),
+        excluded: new SvelteSet(),
+        totalFiles: 0,
+        totalDirs: 0,
         loading: false,
         error: '',
         search: '',
@@ -84,17 +92,13 @@
   // updateEntry replaces the picker entry with a shallow clone + patch.
   // SvelteMap tracks set(); mutating a value in place after an `await`
   // boundary does NOT propagate (Svelte 5 only sees the synchronous
-  // mutation). We always go through this helper to keep that contract.
-  // The `selected` SvelteSet is preserved across clones so toggleFilePicked
-  // / clearPickerSelection don't lose their reactive backing.
+  // mutation). The reactive SvelteSets (`expanded`, `excluded`) are preserved
+  // across clones so their in-place mutations stay tracked.
   function updateEntry(itemName, patch) {
     const cur = ensurePickerEntry(itemName)
     picker.set(itemName, { ...cur, ...patch })
   }
 
-  // Partial (per-file) restore only exists for item types whose backups are
-  // tar archives with an index sidecar. VM and ZFS backups are whole-image
-  // artefacts, so offering the picker would just 404 on the missing sidecar.
   function supportsFilePicker(type) {
     return type === 'container' || type === 'folder' || type === 'plugin'
   }
@@ -103,46 +107,66 @@
     const cur = ensurePickerEntry(item.name)
     const willOpen = !cur.open
     updateEntry(item.name, { open: willOpen })
-    if (willOpen && !cur.contents && !cur.loading) {
+    if (willOpen && !cur.loading) {
       updateEntry(item.name, { loading: true, error: '' })
       try {
-        const contents = await api.getRestorePointContents(selectedPoint.jobId, selectedPoint.id, item.name)
-        updateEntry(item.name, { contents, loading: false })
+        // Load the archive root (dir = '') to populate the top-level nodes
+        // and the recursive totals for the summary label.
+        const res = await api.getRestorePointContents(selectedPoint.jobId, selectedPoint.id, item.name, undefined, '')
+        updateEntry(item.name, {
+          roots: res.entries || [],
+          totalFiles: res.total_files || 0,
+          totalDirs: res.total_dirs || 0,
+          loading: false,
+        })
       } catch (e) {
         updateEntry(item.name, { error: e?.message || 'failed to load file list', loading: false })
       }
     }
   }
 
-  function toggleFilePicked(itemName, filePath) {
+  async function toggleDirExpanded(itemName, dir) {
     const entry = picker.get(itemName)
     if (!entry) return
-    if (entry.selected.has(filePath)) entry.selected.delete(filePath)
-    else entry.selected.add(filePath)
-    // SvelteSet is reactive on add/delete; touch the entry too so the
-    // summary "X of Y selected" counter rerenders.
+    if (entry.expanded.has(dir)) {
+      entry.expanded.delete(dir)
+      updateEntry(itemName, {})
+      return
+    }
+    entry.expanded.add(dir)
     updateEntry(itemName, {})
+    if (entry.listings[dir] === undefined) {
+      try {
+        const res = await api.getRestorePointContents(selectedPoint.jobId, selectedPoint.id, itemName, undefined, dir)
+        const cur = picker.get(itemName)
+        updateEntry(itemName, { listings: { ...cur.listings, [dir]: res.entries || [] } })
+      } catch (e) {
+        updateEntry(itemName, { error: e?.message || 'failed to load folder contents' })
+      }
+    }
   }
 
-  function selectAllFiltered(itemName) {
-    const entry = picker.get(itemName)
-    if (!entry?.contents) return
-    for (const f of filteredFiles(entry)) entry.selected.add(f.path)
-    updateEntry(itemName, {})
-  }
-
-  function clearPickerSelection(itemName) {
+  function toggleFileExcluded(itemName, filePath) {
     const entry = picker.get(itemName)
     if (!entry) return
-    entry.selected.clear()
+    const next = new SvelteSet(entry.excluded)
+    if (next.has(filePath)) next.delete(filePath)
+    else next.add(filePath)
+    updateEntry(itemName, { excluded: next })
+  }
+
+  function restoreAll(itemName) {
+    const entry = picker.get(itemName)
+    if (!entry) return
+    entry.excluded.clear()
     updateEntry(itemName, {})
   }
 
-  function filteredFiles(entry) {
-    if (!entry?.contents?.files) return []
+  function visibleNodes(entry) {
     const q = entry.search.trim().toLowerCase()
-    if (!q) return entry.contents.files
-    return entry.contents.files.filter(f => f.path.toLowerCase().includes(q))
+    const nodes = flattenVisibleTree(entry.roots, entry.listings, entry.expanded)
+    if (!q) return nodes
+    return nodes.filter(n => n.path.toLowerCase().includes(q))
   }
 
   onMount(() => {
@@ -429,17 +453,17 @@
       payload.passphrase = passphrase
     }
 
-    // Feature B: per-item partial restore. Build file_paths map from any
-    // picker entries that have a non-empty selection. Items without an
-    // active selection are restored in full (legacy behaviour).
-    const filePaths = {}
+    // Partial restore via exclusion (issue #323): every item starts fully
+    // selected; unchecked paths are excluded (backend skips them and their
+    // descendants). Items with an empty exclusion set restore in full.
+    const excludePaths = {}
     for (const [itemName, entry] of picker.entries()) {
-      if (entry?.selected && entry.selected.size > 0) {
-        filePaths[itemName] = Array.from(entry.selected)
+      if (entry?.excluded && entry.excluded.size > 0) {
+        excludePaths[itemName] = Array.from(entry.excluded)
       }
     }
-    if (Object.keys(filePaths).length > 0) {
-      payload.file_paths = filePaths
+    if (Object.keys(excludePaths).length > 0) {
+      payload.exclude_paths = excludePaths
     }
 
     onrestore(selectedPoint.jobId, payload)
@@ -728,15 +752,14 @@
       {/if}
     </div>
 
-    <!-- Per-item file picker (Feature B). Folder/plugin/container-volume
-         items now expose a "Restore specific files…" disclosure that
-         loads the tar index sidecar and lets the user pick which entries
-         to extract. Items with an empty selection restore in full. -->
+    <!-- Per-item file tree (issue #323). Folder/plugin/container items
+         expose a "Browse contents" disclosure that lazily loads directory
+         listings from the backend. Every file and folder is selected by
+         default; unchecking a node excludes it from the restore. -->
     <div class="mb-6 space-y-3">
       {#each selectedItemsArray as item (`${item.type}:${item.name}`)}
         {@const entry = picker.get(item.name)}
-        {@const sel = entry?.selected?.size || 0}
-        {@const total = entry?.contents?.files?.length || 0}
+        {@const excludedCount = entry?.excluded?.size || 0}
         {#if !supportsFilePicker(item.type)}
           <div class="bg-surface-2 border border-border rounded-xl p-3 text-sm flex items-center justify-between gap-3">
             <span class="flex items-center gap-2">
@@ -758,14 +781,12 @@
               <span class="text-xs text-text-dim">({item.type})</span>
             </span>
             <span class="text-xs text-text-muted">
-              {#if sel > 0}
-                {sel} of {total} files selected
-              {:else if total > 0}
-                Restore all {total} files
-              {:else if entry?.error}
+              {#if entry?.error}
                 <span class="text-danger">{entry.error}</span>
               {:else if entry?.loading}
                 Loading…
+              {:else if entry?.open && entry?.totalFiles > 0}
+                {summaryLabel(entry.totalFiles, excludedCount)}
               {:else}
                 Click to browse contents
               {/if}
@@ -778,36 +799,46 @@
               {:else if entry.error}
                 <p class="text-xs text-danger">{entry.error}</p>
                 <p class="text-xs text-text-muted">This restore point may have been produced before partial restore was added; whole-archive extract will run instead.</p>
-              {:else if !entry.contents}
-                <p class="text-xs text-text-muted">No contents loaded.</p>
               {:else}
                 <div class="flex items-center gap-2">
                   <input type="text" placeholder="Filter by path…" bind:value={entry.search}
                     class="flex-1 px-3 py-1.5 bg-surface-3 border border-border rounded-lg text-xs text-text placeholder-text-dim" />
-                  <button type="button" onclick={() => selectAllFiltered(item.name)}
-                    class="text-xs px-2 py-1 rounded bg-surface-3 hover:bg-surface-4 text-text-muted hover:text-text">Select all</button>
-                  <button type="button" onclick={() => clearPickerSelection(item.name)}
-                    class="text-xs px-2 py-1 rounded bg-surface-3 hover:bg-surface-4 text-text-muted hover:text-text">Clear</button>
-                </div>
-                <div class="max-h-64 overflow-y-auto border border-border rounded-lg bg-surface-3/30">
-                  {#each filteredFiles(entry) as f (f.path)}
-                    <label class="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-3 cursor-pointer">
-                      <input type="checkbox" checked={entry.selected.has(f.path)}
-                        onchange={() => toggleFilePicked(item.name, f.path)} class="accent-vault" />
-                      <span class="font-mono text-text flex-1 truncate" title={f.path}>{f.path}</span>
-                      {#if f.is_dir}
-                        <span class="text-text-dim">dir</span>
-                      {:else}
-                        <span class="text-text-dim">{formatBytes(f.size)}</span>
-                      {/if}
-                    </label>
-                  {/each}
-                  {#if filteredFiles(entry).length === 0}
-                    <p class="px-3 py-2 text-xs text-text-dim">No files match "{entry.search}"</p>
+                  {#if excludedCount > 0}
+                    <button type="button" onclick={() => restoreAll(item.name)}
+                      class="text-xs px-2 py-1 rounded bg-surface-3 hover:bg-surface-4 text-text-muted hover:text-text">Restore all</button>
                   {/if}
                 </div>
-                {#if sel > 0}
-                  <p class="text-xs text-info">Restoring {sel} selected file{sel === 1 ? '' : 's'} only. Clear to restore everything.</p>
+                <div class="max-h-64 overflow-y-auto border border-border rounded-lg bg-surface-3/30">
+                  {#each visibleNodes(entry) as n (n.path)}
+                    <div class="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-3"
+                      style="padding-left: {8 + n.depth * 16}px">
+                      {#if n.is_dir}
+                        <button type="button" onclick={() => toggleDirExpanded(item.name, n.path)}
+                          class="w-4 h-4 flex items-center justify-center text-text-dim hover:text-text shrink-0"
+                          aria-label="expand">
+                          <svg class="w-3 h-3 transition-transform {entry.expanded.has(n.path) ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                      {:else}
+                        <span class="w-4 shrink-0"></span>
+                      {/if}
+                      <label class="flex items-center gap-2 flex-1 cursor-pointer">
+                        <input type="checkbox" checked={!entry.excluded.has(n.path)}
+                          onchange={() => toggleFileExcluded(item.name, n.path)} class="accent-vault" />
+                        <span class="font-mono text-text flex-1 truncate" title={n.path}>{basename(n.path)}</span>
+                      </label>
+                      {#if n.is_dir}
+                        <span class="text-text-dim">dir</span>
+                      {:else}
+                        <span class="text-text-dim">{formatBytes(n.size)}</span>
+                      {/if}
+                    </div>
+                  {/each}
+                  {#if visibleNodes(entry).length === 0}
+                    <p class="px-3 py-2 text-xs text-text-dim">{entry.search ? `No files match "${entry.search}"` : 'This item is empty'}</p>
+                  {/if}
+                </div>
+                {#if excludedCount > 0}
+                  <p class="text-xs text-info">{summaryLabel(entry.totalFiles, excludedCount)}. Unchecked files and folders will not be restored.</p>
                 {/if}
               {/if}
             </div>

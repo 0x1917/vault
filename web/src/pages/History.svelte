@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { SvelteSet, SvelteMap } from 'svelte/reactivity'
   import { api, isReplicaMode } from '../lib/api.js'
-  import { relTime, formatBytes, formatSpeed, formatDurationFromDates, statusBadge, getFailureReason, formatDate } from '../lib/utils.js'
+  import { relTime, formatBytes, formatSpeed, formatDurationFromDates, statusBadge, getFailureReason, formatDate, restoreTypeNoun } from '../lib/utils.js'
   import { onWsMessage } from '../lib/ws.svelte.js'
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
@@ -394,7 +394,7 @@
                           <span>{duration(run)}</span>
                           {#if run.items_total}
                             <span>
-                              <span class="text-success">{run.items_done}</span>/{run.items_total} items
+                              <span class="text-success">{run.items_done}</span>/{run.items_total} {restoreTypeNoun(run)}
                               {#if run.items_failed > 0}
                                 <span class="text-danger">({run.items_failed} failed)</span>
                               {/if}

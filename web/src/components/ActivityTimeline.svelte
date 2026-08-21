@@ -1,5 +1,5 @@
 <script>
-  import { statusBadge, relTime, formatBytes, formatSpeed, formatDurationFromDates, getFailureReason, formatDate } from '../lib/utils.js'
+  import { statusBadge, relTime, formatBytes, formatSpeed, formatDurationFromDates, getFailureReason, formatDate, restoreTypeNoun } from '../lib/utils.js'
 
   let { runs = [], maxItems = 8 } = $props()
 
@@ -120,7 +120,7 @@
                     <span>{formatSpeed(run.size_bytes, run.duration_seconds)}</span>
                   {/if}
                   {#if run.items_total}
-                    <span>{run.items_done || 0}/{run.items_total} items</span>
+                    <span>{run.items_done || 0}/{run.items_total} {restoreTypeNoun(run)}</span>
                   {/if}
                 </div>
                 {#if getFailureReason(run)}

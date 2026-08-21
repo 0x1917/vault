@@ -33,32 +33,40 @@ type VerifyRunner func(jobID int64, mode string)
 // on the runner package.
 type RetryDispatcher func(jobID, originalRunID int64, attempt int)
 
+// FullRunner is called when a job's scheduled full backup is due.
+type FullRunner func(jobID int64)
+
 // Scheduler manages cron entries for backup jobs and replication sources.
 type Scheduler struct {
-	cron              *cron.Cron
-	db                *db.DB
-	runner            JobRunner
-	replicationRunner ReplicationRunner
-	healthChecker     HealthChecker
-	verifyRunner      VerifyRunner
-	retryDispatcher   RetryDispatcher
-	entries           map[int64]cron.EntryID
-	lastDayEntries    map[int64]cron.EntryID // daily-trigger entries for L (last day) schedules
-	verifyEntries     map[int64]cron.EntryID
-	replEntries       map[int64]cron.EntryID
-	mu                sync.Mutex
+	cron               *cron.Cron
+	db                 *db.DB
+	runner             JobRunner
+	replicationRunner  ReplicationRunner
+	healthChecker      HealthChecker
+	verifyRunner       VerifyRunner
+	retryDispatcher    RetryDispatcher
+	fullRunner         FullRunner
+	entries            map[int64]cron.EntryID
+	lastDayEntries     map[int64]cron.EntryID // daily-trigger entries for L (last day) schedules
+	verifyEntries      map[int64]cron.EntryID
+	fullEntries        map[int64]cron.EntryID
+	fullLastDayEntries map[int64]cron.EntryID
+	replEntries        map[int64]cron.EntryID
+	mu                 sync.Mutex
 }
 
 // New creates a Scheduler for backup jobs.
 func New(database *db.DB, runner JobRunner) *Scheduler {
 	return &Scheduler{
-		cron:           cron.New(),
-		db:             database,
-		runner:         runner,
-		entries:        make(map[int64]cron.EntryID),
-		lastDayEntries: make(map[int64]cron.EntryID),
-		verifyEntries:  make(map[int64]cron.EntryID),
-		replEntries:    make(map[int64]cron.EntryID),
+		cron:               cron.New(),
+		db:                 database,
+		runner:             runner,
+		entries:            make(map[int64]cron.EntryID),
+		lastDayEntries:     make(map[int64]cron.EntryID),
+		verifyEntries:      make(map[int64]cron.EntryID),
+		fullEntries:        make(map[int64]cron.EntryID),
+		fullLastDayEntries: make(map[int64]cron.EntryID),
+		replEntries:        make(map[int64]cron.EntryID),
 	}
 }
 
@@ -93,6 +101,14 @@ func (s *Scheduler) SetRetryDispatcher(fn RetryDispatcher) {
 	s.retryDispatcher = fn
 }
 
+// SetFullRunner installs the per-job full-backup callback. Must be called
+// before Start() / Reload() for full-backup entries to register.
+func (s *Scheduler) SetFullRunner(fn FullRunner) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fullRunner = fn
+}
+
 func (s *Scheduler) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,6 +125,9 @@ func (s *Scheduler) Start() error {
 		// a user can run nightly backups but only verify weekly.
 		if job.Enabled && job.VerifySchedule != "" && s.verifyRunner != nil {
 			s.addVerifyJob(job)
+		}
+		if job.Enabled && job.FullSchedule != "" && s.fullRunner != nil {
+			s.addFullJob(job)
 		}
 	}
 
@@ -170,6 +189,16 @@ func (s *Scheduler) Reload() error {
 		delete(s.replEntries, srcID)
 	}
 
+	// Remove all existing full-backup entries.
+	for jobID, entryID := range s.fullEntries {
+		s.cron.Remove(entryID)
+		delete(s.fullEntries, jobID)
+	}
+	for jobID, entryID := range s.fullLastDayEntries {
+		s.cron.Remove(entryID)
+		delete(s.fullLastDayEntries, jobID)
+	}
+
 	// Reload jobs from DB.
 	jobs, err := s.db.ListJobs()
 	if err != nil {
@@ -181,6 +210,9 @@ func (s *Scheduler) Reload() error {
 		}
 		if job.Enabled && job.VerifySchedule != "" && s.verifyRunner != nil {
 			s.addVerifyJob(job)
+		}
+		if job.Enabled && job.FullSchedule != "" && s.fullRunner != nil {
+			s.addFullJob(job)
 		}
 	}
 
@@ -236,6 +268,34 @@ func (s *Scheduler) addVerifyJob(job db.Job) {
 		return
 	}
 	s.verifyEntries[job.ID] = entryID
+}
+
+// addFullJob registers the per-job full-backup cron entry (issue #322). It
+// honours the same "L" (last day of month) day-of-month token as addJob, so
+// a monthly full schedule can target the last day.
+func (s *Scheduler) addFullJob(job db.Job) {
+	jobID := job.ID
+	if schedule, ok := parseLastDaySchedule(job.FullSchedule); ok {
+		entryID, err := s.cron.AddFunc(schedule, func() {
+			if isLastDayOfMonth(time.Now()) {
+				s.fullRunner(jobID)
+			}
+		})
+		if err != nil {
+			log.Printf("Failed to schedule full backup for job %d (%s): %v", job.ID, job.Name, err)
+			return
+		}
+		s.fullLastDayEntries[job.ID] = entryID
+		return
+	}
+	entryID, err := s.cron.AddFunc(job.FullSchedule, func() {
+		s.fullRunner(jobID)
+	})
+	if err != nil {
+		log.Printf("Failed to schedule full backup for job %d (%s): %v", job.ID, job.Name, err)
+		return
+	}
+	s.fullEntries[job.ID] = entryID
 }
 
 // ValidateSchedule reports whether spec is a schedule the scheduler can run.

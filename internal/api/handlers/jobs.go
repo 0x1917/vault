@@ -248,6 +248,25 @@ func validateJobEnum(field, value string) error {
 	return fmt.Errorf("invalid %s %q (expected one of: %s)", field, value, strings.Join(allowed, ", "))
 }
 
+// validateFullSchedule reports whether a full_schedule value is valid for the
+// given backup_type_chain. Empty is always valid (disabled). A non-empty
+// value requires an incremental or differential chain (a full-only job can
+// only ever run full backups, so a separate full schedule would be ignored)
+// and must be a schedule the scheduler can parse.
+func validateFullSchedule(chain, schedule string) error {
+	schedule = strings.TrimSpace(schedule)
+	if schedule == "" {
+		return nil
+	}
+	if chain == "full" || chain == "" {
+		return fmt.Errorf("full_schedule only applies to incremental or differential jobs")
+	}
+	if err := scheduler.ValidateSchedule(schedule); err != nil {
+		return fmt.Errorf("invalid full_schedule: %w", err)
+	}
+	return nil
+}
+
 func validateJobInput(w http.ResponseWriter, job *db.Job) bool {
 	job.Name = strings.TrimSpace(job.Name)
 	if job.Name == "" {
@@ -266,6 +285,15 @@ func validateJobInput(w http.ResponseWriter, job *db.Job) bool {
 	job.Schedule = strings.TrimSpace(job.Schedule)
 	if err := scheduler.ValidateSchedule(job.Schedule); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid schedule: "+err.Error())
+		return false
+	}
+	// Normalize and validate the full-backup schedule (issue #322), mirroring
+	// the schedule handling above: whitespace becomes "" (disabled) and the
+	// value must be one the scheduler can run. Rejecting it on a full-only
+	// job keeps the API from persisting a setting that can never fire.
+	job.FullSchedule = strings.TrimSpace(job.FullSchedule)
+	if err := validateFullSchedule(job.BackupTypeChain, job.FullSchedule); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return false
 	}
 	for field, value := range map[string]string{

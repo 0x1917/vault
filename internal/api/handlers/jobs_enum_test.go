@@ -50,3 +50,34 @@ func TestJobEnumsMatchConfigConstants(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateFullSchedule pins the full_schedule rules (issue #322): empty
+// is always valid, a non-empty value requires an incremental/differential
+// chain, and the cron must parse.
+func TestValidateFullSchedule(t *testing.T) {
+	cases := []struct {
+		name     string
+		chain    string
+		schedule string
+		wantErr  bool
+	}{
+		{"disabled on incremental", "incremental", "", false},
+		{"disabled on full", "full", "", false},
+		{"cron on incremental", "incremental", "0 3 * * 0", false},
+		{"cron on differential", "differential", "0 3 1 * *", false},
+		{"full-only rejects schedule", "full", "0 3 * * 0", true},
+		{"empty chain rejects schedule", "", "0 3 * * 0", true},
+		{"bad cron rejected", "incremental", "not a cron", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateFullSchedule(tc.chain, tc.schedule)
+			if tc.wantErr && err == nil {
+				t.Fatalf("validateFullSchedule(%q, %q) = nil, want error", tc.chain, tc.schedule)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("validateFullSchedule(%q, %q) = %v, want nil", tc.chain, tc.schedule, err)
+			}
+		})
+	}
+}

@@ -646,6 +646,18 @@ func (r *Runner) runJobInternal(jobID int64, opts runOptions) {
 		return
 	}
 
+	// Container-scope expansion (#324): an "all"-scoped job backs up every
+	// currently-existing container, so its container items are rebuilt from
+	// live discovery each run — new containers are picked up automatically and
+	// deleted containers drop off without touching the stored items. On a
+	// discovery failure (e.g. Docker down) we keep the stored items so a
+	// transient outage never silently strips the container list.
+	if expanded, expandErr := expandContainerScope(job, items); expandErr == nil {
+		items = expanded
+	} else {
+		log.Printf("runner: job %d: expanding all-scope containers: %v", jobID, expandErr)
+	}
+
 	dest, err := r.db.GetStorageDestination(job.StorageDestID)
 	if err != nil {
 		log.Printf("runner: failed to get storage for job %d: %v", jobID, err)

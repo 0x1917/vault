@@ -54,3 +54,38 @@ func TestTarIncludeSet_PrefixCollisionDoesNotOverMatch(t *testing.T) {
 		t.Error("prefix similarity must not cross directory boundary")
 	}
 }
+
+func TestTarExcludeSet_EmptyExcludesNothing(t *testing.T) {
+	s := newExcludeSet(nil)
+	for _, name := range []string{"a.txt", "config/app.yml", ""} {
+		if s.matches(name) {
+			t.Errorf("empty exclude set must not exclude %q", name)
+		}
+	}
+}
+
+func TestTarExcludeSet_ExactAndDescendant(t *testing.T) {
+	s := newExcludeSet([]string{"config"})
+	if !s.matches("config") {
+		t.Error("exact excluded dir must match")
+	}
+	if !s.matches("config/app.yml") {
+		t.Error("descendant of excluded dir must match")
+	}
+	if !s.matches("config/sub/deep.txt") {
+		t.Error("nested descendant must match")
+	}
+	if s.matches("other/app.yml") {
+		t.Error("unrelated path must not be excluded")
+	}
+}
+
+func TestTarExcludeSet_StripsSlashesAndBackslashes(t *testing.T) {
+	s := newExcludeSet([]string{"/config/", "data\\notes.txt"})
+	if !s.matches("config/app.yml") {
+		t.Error("leading/trailing slash normalization missed")
+	}
+	if !s.matches("data/notes.txt") {
+		t.Error("backslash normalization missed")
+	}
+}

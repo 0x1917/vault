@@ -61,3 +61,33 @@ describe('jobs', () => {
     expect(fetch.mock.calls[0][0]).toBe('/api/v1/jobs?details=true')
   })
 })
+
+describe('restore point contents', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('appends the dir query param for tree browsing', async () => {
+    const fetch = vi.fn(async () => new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetch)
+
+    await api.getRestorePointContents(1, 2, 'plex', undefined, 'appdata/plex')
+
+    expect(fetch.mock.calls[0][0])
+      .toBe('/api/v1/jobs/1/restore-points/2/contents?item=plex&dir=appdata%2Fplex')
+  })
+
+  it('sends an empty dir for the archive root', async () => {
+    const fetch = vi.fn(async () => new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetch)
+
+    await api.getRestorePointContents(1, 2, 'plex', undefined, '')
+
+    expect(fetch.mock.calls[0][0])
+      .toBe('/api/v1/jobs/1/restore-points/2/contents?item=plex&dir=')
+  })
+})

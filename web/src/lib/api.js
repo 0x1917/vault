@@ -136,11 +136,17 @@ export const api = {
   },
   deleteRestorePoint: (jobId, rpId) => request('DELETE', `/jobs/${jobId}/restore-points/${rpId}`),
   // getRestorePointContents fetches the tar-index sidecar for one item at a
-  // restore point, returning {version, archive, files:[{path,size,mode,modtime,is_dir}]}.
-  // `file` is optional; omit to let the server pick the first index sidecar it finds
-  // in the item's directory (right call for single-archive items like folders/plugins).
-  getRestorePointContents: (jobId, rpId, item, file) =>
-    request('GET', `/jobs/${jobId}/restore-points/${rpId}/contents?item=${encodeURIComponent(item)}${file ? `&file=${encodeURIComponent(file)}` : ''}`),
+  // restore point. When `dir` is provided the server returns a lazy
+  // per-directory view ({dir, entries, total_files, total_dirs}); otherwise it
+  // returns the full flat index ({version, archive, files}).
+  // `file` is optional; omit to let the server pick the first index sidecar.
+  // `dir` may be '' to request the archive root's children.
+  getRestorePointContents: (jobId, rpId, item, file, dir) => {
+    const params = new URLSearchParams({ item })
+    if (file) params.set('file', file)
+    if (dir !== undefined && dir !== null) params.set('dir', dir)
+    return request('GET', `/jobs/${jobId}/restore-points/${rpId}/contents?${params.toString()}`)
+  },
   runJob: (id) => request('POST', `/jobs/${id}/run`),
   cancelJob: (id) => request('POST', `/jobs/${id}/cancel`),
   listStorageFiles: (id, prefix = '') => request('GET', `/storage/${id}/list${prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''}`),

@@ -52,11 +52,11 @@ func TestNewHandlerUnknown(t *testing.T) {
 func TestResolveBackupTypeFull(t *testing.T) {
 	t.Parallel()
 	r, _, _ := setupTestRunner(t)
-	res := r.resolveBackupType(db.Job{BackupTypeChain: ""})
+	res := r.resolveBackupType(db.Job{BackupTypeChain: ""}, false)
 	if res.BackupType != "full" || res.ParentRP != nil {
 		t.Errorf("empty chain → %+v, want full/no-parent", res)
 	}
-	res2 := r.resolveBackupType(db.Job{BackupTypeChain: "full"})
+	res2 := r.resolveBackupType(db.Job{BackupTypeChain: "full"}, false)
 	if res2.BackupType != "full" || res2.ParentRP != nil {
 		t.Errorf("full chain → %+v, want full/no-parent", res2)
 	}
@@ -72,7 +72,7 @@ func TestResolveBackupTypeIncrementalFallsBackToFull(t *testing.T) {
 		Name: "inc-job", BackupTypeChain: "incremental", StorageDestID: dest.ID,
 	})
 	job, _ := database.GetJob(jobID)
-	res := r.resolveBackupType(job)
+	res := r.resolveBackupType(job, false)
 	if res.BackupType != "full" {
 		t.Errorf("incremental with no history → %q, want full", res.BackupType)
 	}
@@ -97,7 +97,7 @@ func TestResolveBackupTypeIncrementalWithHistory(t *testing.T) {
 		t.Fatalf("CreateRestorePoint: %v", err)
 	}
 	job, _ := database.GetJob(jobID)
-	res := r.resolveBackupType(job)
+	res := r.resolveBackupType(job, false)
 	if res.BackupType != "incremental" {
 		t.Errorf("incremental with history → %q, want incremental", res.BackupType)
 	}
@@ -116,7 +116,7 @@ func TestResolveBackupTypeDifferentialFallsBackToFull(t *testing.T) {
 		Name: "diff-job", BackupTypeChain: "differential", StorageDestID: dest.ID,
 	})
 	job, _ := database.GetJob(jobID)
-	res := r.resolveBackupType(job)
+	res := r.resolveBackupType(job, false)
 	if res.BackupType != "full" {
 		t.Errorf("differential with no history → %q, want full", res.BackupType)
 	}
@@ -127,7 +127,7 @@ func TestResolveBackupTypeDifferentialFallsBackToFull(t *testing.T) {
 func TestResolveBackupTypeUnknownChainFallsBackToFull(t *testing.T) {
 	t.Parallel()
 	r, _, _ := setupTestRunner(t)
-	res := r.resolveBackupType(db.Job{BackupTypeChain: "weird"})
+	res := r.resolveBackupType(db.Job{BackupTypeChain: "weird"}, false)
 	if res.BackupType != "full" {
 		t.Errorf("unknown chain → %q, want full", res.BackupType)
 	}
@@ -358,5 +358,37 @@ func TestParseItemChecksumsInvalid(t *testing.T) {
 	}
 	if _, present := got["b"]; present {
 		t.Errorf("non-string hash should be skipped, got %v", got["b"])
+	}
+}
+
+// TestResolveBackupTypeForceFull confirms a forced full run resolves to
+// "full" even when an incremental job already has prior restore points
+// (issue #322 — scheduled full backups).
+func TestResolveBackupTypeForceFull(t *testing.T) {
+	t.Parallel()
+	r, database, storageDir := setupTestRunner(t)
+	dest := createLocalDest(t, database, storageDir)
+	jobID, _ := database.CreateJob(db.Job{
+		Name: "inc-force-full", BackupTypeChain: "incremental", StorageDestID: dest.ID,
+	})
+	runID, _ := database.CreateJobRun(db.JobRun{JobID: jobID, Status: "completed", BackupType: "full"})
+	if _, err := database.CreateRestorePoint(db.RestorePoint{
+		JobRunID: runID, JobID: jobID, BackupType: "full",
+		StoragePath: "inc-force-full/run1", Metadata: "{}",
+	}); err != nil {
+		t.Fatalf("CreateRestorePoint: %v", err)
+	}
+	job, _ := database.GetJob(jobID)
+
+	// Without force, an incremental job with history resolves to incremental.
+	inc := r.resolveBackupType(job, false)
+	if inc.BackupType != "incremental" {
+		t.Errorf("without force → %q, want incremental", inc.BackupType)
+	}
+
+	// With force, the same job resolves to full with no parent.
+	full := r.resolveBackupType(job, true)
+	if full.BackupType != "full" || full.ParentRP != nil {
+		t.Errorf("with force → %+v, want full/no-parent", full)
 	}
 }

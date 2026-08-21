@@ -82,6 +82,10 @@ type runOptions struct {
 	retryOfRunID int64
 	retryAttempt int
 	manual       bool
+	// forceFull makes this run a full backup regardless of the job's
+	// backup_type_chain or restore-point history (issue #322 — scheduled
+	// full backups for incremental/differential jobs).
+	forceFull bool
 }
 
 // retryOfRunIDPtr returns the nullable pointer form for db.JobRun. The
@@ -575,6 +579,13 @@ func (r *Runner) RunJobRetry(jobID, originalRunID int64, attempt int) {
 	r.runJobInternal(jobID, runOptions{retryOfRunID: originalRunID, retryAttempt: attempt})
 }
 
+// RunJobFull executes a forced FULL backup for the given job ID, regardless
+// of its backup_type_chain or restore-point history. The scheduler wires this
+// in for a job's full-backup schedule (issue #322).
+func (r *Runner) RunJobFull(jobID int64) {
+	r.runJobInternal(jobID, runOptions{forceFull: true})
+}
+
 // runJobInternal is the workhorse executed by RunJob/RunJobManual/RunJobRetry.
 // opts carries auxiliary state (retry attempt, manual flag) that affects
 // run-row population and retry scheduling.
@@ -659,7 +670,7 @@ func (r *Runner) runJobInternal(jobID int64, opts runOptions) {
 		skipped := db.JobRun{
 			JobID:        job.ID,
 			Status:       "skipped",
-			BackupType:   r.resolveBackupType(job).BackupType,
+			BackupType:   r.resolveBackupType(job, opts.forceFull).BackupType,
 			RetryAttempt: opts.retryAttempt,
 			RetryOfRunID: opts.retryOfRunIDPtr(),
 		}
@@ -698,7 +709,7 @@ func (r *Runner) runJobInternal(jobID int64, opts runOptions) {
 		skippedRun := db.JobRun{
 			JobID:        job.ID,
 			Status:       "skipped",
-			BackupType:   r.resolveBackupType(job).BackupType,
+			BackupType:   r.resolveBackupType(job, opts.forceFull).BackupType,
 			ItemsTotal:   0,
 			RetryAttempt: opts.retryAttempt,
 			RetryOfRunID: opts.retryOfRunIDPtr(),
@@ -744,7 +755,7 @@ func (r *Runner) runJobInternal(jobID int64, opts runOptions) {
 	r.adaptiveClearPostpone(jobID)
 
 	// Resolve the actual backup type for this run (full/incremental/differential).
-	btResult := r.resolveBackupType(job)
+	btResult := r.resolveBackupType(job, opts.forceFull)
 
 	// Stale-item detection (#119). Items whose backing container/VM/folder/
 	// plugin/dataset no longer exists are SKIPPED (not failed) and flagged in
@@ -5226,7 +5237,10 @@ type backupTypeResult struct {
 //     otherwise "incremental" with the most recent restore point as parent
 //   - "differential": returns "full" if no previous full exists,
 //     otherwise "differential" with the last full as parent
-func (r *Runner) resolveBackupType(job db.Job) backupTypeResult {
+func (r *Runner) resolveBackupType(job db.Job, forceFull bool) backupTypeResult {
+	if forceFull {
+		return backupTypeResult{BackupType: "full"}
+	}
 	chain := job.BackupTypeChain
 	if chain == "" || chain == "full" {
 		return backupTypeResult{BackupType: "full"}

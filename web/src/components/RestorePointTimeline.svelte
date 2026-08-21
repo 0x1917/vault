@@ -1,5 +1,6 @@
 <script>
-  import { formatBytes, relTime } from '../lib/utils.js'
+  import { formatBytes, relTime, formatDate } from '../lib/utils.js'
+  import { chainDeps, chainReplayText } from '../lib/chain-labels.js'
 
   let {
     points = [],
@@ -16,9 +17,6 @@
   function parseMeta(rp) {
     if (!rp?.metadata) return {}
     try { return JSON.parse(rp.metadata) } catch { return {} }
-  }
-  function chainDeps(rp) {
-    return Math.max(0, (rp?.chain_depth || 1) - 1)
   }
   function displaySize(rp) {
     return sizeFor ? sizeFor(rp) : rp.size_bytes
@@ -146,7 +144,7 @@
                 {#if rp.chain_status === 'broken'}
                   <span class="text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-danger/15 text-danger">Broken chain</span>
                 {:else if chainDeps(rp) > 0}
-                  <span class="text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-info/15 text-info">Chain ×{rp.chain_depth}</span>
+                  <span class="text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-info/15 text-info" title="This restore point is part of a chain of {rp.chain_depth} linked backups. Restoring it also replays the {chainDeps(rp)} earlier backup{chainDeps(rp) === 1 ? '' : 's'} in the chain.">Chain ×{rp.chain_depth}</span>
                 {/if}
                 {#if rp.retention_preserved}
                   <span class="text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-warning/15 text-warning">Retained for chain</span>
@@ -184,7 +182,7 @@
             {#if rp.chain_status === 'broken'}
               <p class="mt-2 text-xs text-danger">{rp.chain_warning}</p>
             {:else if chainDeps(rp) > 0}
-              <p class="mt-2 text-xs text-info">Restore replays {chainDeps(rp)} earlier backup{chainDeps(rp) === 1 ? '' : 's'} in this chain.</p>
+              <p class="mt-2 text-xs text-info">{chainReplayText(rp, formatDate)}</p>
             {/if}
           </div>
         {/each}

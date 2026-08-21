@@ -314,6 +314,10 @@ var alterMigrations = []string{
 	"ALTER TABLE replication_sources ADD COLUMN last_sync_restore_points INTEGER DEFAULT 0",
 	"ALTER TABLE replication_sources ADD COLUMN last_sync_bytes INTEGER DEFAULT 0",
 	"ALTER TABLE replication_sources ADD COLUMN last_sync_success_at DATETIME",
+	// Scheduled full backups (issue #322). full_schedule is a cron expression
+	// that schedules a recurring FULL backup for an incremental or
+	// differential job. Empty means disabled.
+	"ALTER TABLE jobs ADD COLUMN full_schedule TEXT DEFAULT ''",
 }
 
 // dataMigrations are idempotent row rewrites, applied after alterMigrations.

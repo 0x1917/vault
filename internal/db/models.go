@@ -7,12 +7,18 @@ import (
 )
 
 type Job struct {
-	ID                int64  `json:"id"`
-	Name              string `json:"name"`
-	Description       string `json:"description"`
-	Enabled           bool   `json:"enabled"`
-	Schedule          string `json:"schedule"`
-	BackupTypeChain   string `json:"backup_type_chain"`
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	Enabled         bool   `json:"enabled"`
+	Schedule        string `json:"schedule"`
+	BackupTypeChain string `json:"backup_type_chain"`
+	// FullSchedule is a cron expression that, when set on an incremental or
+	// differential job, schedules a separate recurring FULL backup — the
+	// chain anchor that diff/inc runs attach to. Empty means no scheduled
+	// full backup: the job runs full only on its first run (no prior
+	// restore point). Always empty for full-only jobs (issue #322).
+	FullSchedule      string `json:"full_schedule"`
 	RetentionCount    int    `json:"retention_count"`
 	RetentionDays     int    `json:"retention_days"`
 	Compression       string `json:"compression"`

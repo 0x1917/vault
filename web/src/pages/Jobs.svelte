@@ -7,6 +7,7 @@
   import { onWsMessage } from '../lib/ws.svelte.js'
   import { getProgress, handleProgressMessage, restoreFromStatus } from '../lib/progress.svelte.js'
   import { describeSchedule, relTimeUntil } from '../lib/utils.js'
+  import { isAllScope, pickerTypesForScope, hasEffectiveItems } from '../lib/container-scope.js'
   import Modal from '../components/Modal.svelte'
   import Toast from '../components/Toast.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -20,6 +21,7 @@
   import ScriptBrowser from '../components/ScriptBrowser.svelte'
   import TypePicker from '../components/TypePicker.svelte'
   import Tooltip from '../components/Tooltip.svelte'
+  import ContainerScopeSelector from '../components/ContainerScopeSelector.svelte'
   import RetryDelaysEditor from '../components/RetryDelaysEditor.svelte'
 
   let loading = $state(true)
@@ -266,6 +268,7 @@
       compression: 'zstd',
       compression_level: '',
       container_mode: 'one_by_one',
+      container_scope: 'custom',
       vm_mode: 'snapshot',
       pre_script: '',
       post_script: '',
@@ -602,6 +605,7 @@
         compression: data.job.compression || 'zstd',
         compression_level: data.job.compression_level || '',
         container_mode: data.job.container_mode || 'one_by_one',
+        container_scope: data.job.container_scope || 'custom',
         // Read the saved VM backup mode so editing a job preserves the user's
         // choice (snapshot vs cold). Falls back to 'snapshot' for jobs created
         // before this column existed.
@@ -719,6 +723,7 @@
         compression_level: fullJob.compression_level || '',
         encryption: fullJob.encryption || 'none',
         container_mode: fullJob.container_mode || 'one_by_one',
+        container_scope: fullJob.container_scope || 'custom',
         backup_type_chain: fullJob.backup_type_chain || 'full',
         retention_count: fullJob.retention_count || 5,
         retention_days: fullJob.retention_days || 30,
@@ -818,7 +823,7 @@
   // 3 How (mode/type/compression/encryption + Advanced accordions) ·
   // 4 Name & review (name/description + summary).
   let canNext = $derived.by(() => {
-    if (step === 1) return form.selectedTypes.length > 0 && form.items.length > 0
+    if (step === 1) return form.selectedTypes.length > 0 && hasEffectiveItems(form.items, form.selectedTypes, form.container_scope)
     if (step === 2) return form.storage_dest_id > 0
     if (step === 3) return vmRestoreVerifyErrors.length === 0
     return true
@@ -826,14 +831,14 @@
 
   let stepHint = $derived.by(() => {
     if (step === 1 && form.selectedTypes.length === 0) return 'Select at least one backup type'
-    if (step === 1 && form.items.length === 0) return 'Select at least one item to back up'
+    if (step === 1 && !hasEffectiveItems(form.items, form.selectedTypes, form.container_scope)) return 'Select at least one item to back up'
     if (step === 2 && form.storage_dest_id === 0) return 'Select a storage destination'
     if (step === 3 && vmRestoreVerifyErrors.length > 0) return vmRestoreVerifyErrors[0]
     // Review step: the final save needs every requirement, so name the first
     // unmet one (a jumped stepper can reach here with an earlier step blank).
     if (step === 4) {
       if (form.selectedTypes.length === 0) return 'Select at least one backup type'
-      if (form.items.length === 0) return 'Select at least one item to back up'
+      if (!hasEffectiveItems(form.items, form.selectedTypes, form.container_scope)) return 'Select at least one item to back up'
       if (form.storage_dest_id === 0) return 'Select a storage destination'
       if (vmRestoreVerifyErrors.length > 0) return vmRestoreVerifyErrors[0]
       if (!form.name.trim()) return 'Enter a job name to continue'
@@ -844,7 +849,7 @@
   // Combined gate for the express one-page form: every required field at once.
   let canSaveExpress = $derived(
     form.selectedTypes.length > 0 &&
-    form.items.length > 0 &&
+    hasEffectiveItems(form.items, form.selectedTypes, form.container_scope) &&
     form.storage_dest_id > 0 &&
     form.name.trim().length > 0 &&
     vmRestoreVerifyErrors.length === 0
@@ -867,6 +872,11 @@
   let selectedContainerItems = $derived(form.items.filter(i => i.item_type === 'container'))
   let selectedFolderItems = $derived(form.items.filter(i => i.item_type === 'folder'))
   let vmRestoreVerifyErrors = $derived(selectedVMItems.map(getVMRestoreVerifyError).filter(Boolean))
+
+  // The types the ItemPicker may offer. In 'all' scope containers are implicit,
+  // so they are removed from the picker; the picker's own prune effect then
+  // drops any explicit container items the user had selected (#324).
+  let pickerTypes = $derived(pickerTypesForScope(form.selectedTypes, form.container_scope))
 
   // Selected VMs whose disks don't support libvirt checkpoints (raw/mixed), so
   // incremental/differential backups aren't available for this job.
@@ -1388,9 +1398,18 @@
           <span class="block text-sm font-medium text-text-muted mb-1.5">Backup Types</span>
           <TypePicker bind:selectedTypes={form.selectedTypes} />
         </div>
+        {#if form.selectedTypes.includes('containers')}
+          <div>
+            <ContainerScopeSelector bind:scope={form.container_scope} />
+          </div>
+        {/if}
         <div>
           <span class="block text-sm font-medium text-text-muted mb-1.5">Items</span>
-          <ItemPicker bind:items={form.items} allowedTypes={form.selectedTypes} />
+          {#if isAllScope(form.container_scope) && form.selectedTypes.length === 1}
+            <p class="text-sm text-text-muted">All containers will be backed up automatically — new containers are included as they are added.</p>
+          {:else}
+            <ItemPicker bind:items={form.items} allowedTypes={pickerTypes} />
+          {/if}
         </div>
         <div>
           <label for="ex_name" class="block text-sm font-medium text-text-muted mb-1.5">Job Name</label>
@@ -1468,12 +1487,19 @@
     {#if step === 1}
       <div class="space-y-4">
         <TypePicker bind:selectedTypes={form.selectedTypes} />
+        {#if form.selectedTypes.includes('containers')}
+          <ContainerScopeSelector bind:scope={form.container_scope} />
+        {/if}
       </div>
     {/if}
     {#if step === 1}
       <div class="space-y-4 mt-6">
-        <p class="text-sm text-text-muted">Select the specific items to include in this backup job.</p>
-        <ItemPicker bind:items={form.items} allowedTypes={form.selectedTypes} />
+        {#if isAllScope(form.container_scope) && form.selectedTypes.length === 1}
+          <p class="text-sm text-text-muted">All containers will be backed up automatically — new containers are included as they are added.</p>
+        {:else}
+          <p class="text-sm text-text-muted">Select the specific items to include in this backup job.</p>
+          <ItemPicker bind:items={form.items} allowedTypes={pickerTypes} />
+        {/if}
       </div>
     {/if}
 

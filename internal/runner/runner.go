@@ -2779,6 +2779,47 @@ func (r *Runner) markRunStalled(runID, jobID int64, reason string) {
 	})
 }
 
+// restoredItemSize returns the size recorded for itemName in a restore
+// point's metadata (the item_sizes map written by the backup path), or 0 when
+// the restore point predates per-item sizes, the metadata is malformed, or the
+// item has no recorded size.
+func restoredItemSize(metadata, itemName string) int64 {
+	if metadata == "" {
+		return 0
+	}
+	var meta struct {
+		ItemSizes map[string]json.RawMessage `json:"item_sizes"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &meta); err != nil {
+		return 0
+	}
+	raw, ok := meta.ItemSizes[itemName]
+	if !ok {
+		return 0
+	}
+	var size int64
+	if err := json.Unmarshal(raw, &size); err != nil {
+		return 0
+	}
+	return size
+}
+
+// restoredRunSizeBytes totals the size of only the items actually being
+// restored, rather than the whole restore point. It sums the per-item sizes
+// recorded in metadata.item_sizes for each target; when none are available
+// (legacy restore points without per-item sizes) it falls back to the restore
+// point's total size so a partial restore never reports the full backup size.
+func restoredRunSizeBytes(restorePoint db.RestorePoint, targets []RestoreTarget) int64 {
+	var total int64
+	for _, t := range targets {
+		total += restoredItemSize(restorePoint.Metadata, t.Name)
+	}
+	if total > 0 {
+		return total
+	}
+	return restorePoint.SizeBytes
+}
+
 // RunRestore executes a tracked restore operation. It creates a job_run
 // record with run_type="restore", restores each target item, updates
 // progress via WebSocket, and finalises the run record.
@@ -2930,9 +2971,10 @@ func (r *Runner) RunRestore(restorePoint db.RestorePoint, targets []RestoreTarge
 		elapsed := time.Since(start)
 
 		result := map[string]any{
-			"name":     t.Name,
-			"type":     t.Type,
-			"duration": elapsed.String(),
+			"name":       t.Name,
+			"type":       t.Type,
+			"size_bytes": restoredItemSize(restorePoint.Metadata, t.Name),
+			"duration":   elapsed.String(),
 		}
 
 		if restoreErr != nil {
@@ -2971,6 +3013,7 @@ func (r *Runner) RunRestore(restorePoint db.RestorePoint, targets []RestoreTarge
 	}
 
 	// Finalise the run.
+	restoredSize := restoredRunSizeBytes(restorePoint, targets)
 	status := "completed"
 	if itemsFailed > 0 && itemsDone > 0 {
 		status = "partial"
@@ -2983,7 +3026,7 @@ func (r *Runner) RunRestore(restorePoint db.RestorePoint, targets []RestoreTarge
 	run.Log = string(logJSON)
 	run.ItemsDone = itemsDone
 	run.ItemsFailed = itemsFailed
-	run.SizeBytes = restorePoint.SizeBytes
+	run.SizeBytes = restoredSize
 	_ = r.db.UpdateJobRun(run)
 
 	r.broadcast(map[string]any{
@@ -2995,7 +3038,7 @@ func (r *Runner) RunRestore(restorePoint db.RestorePoint, targets []RestoreTarge
 		"items_done":   itemsDone,
 		"items_failed": itemsFailed,
 		"items_total":  len(targets),
-		"size_bytes":   restorePoint.SizeBytes,
+		"size_bytes":   restoredSize,
 	})
 
 	level := "info"
@@ -3015,7 +3058,7 @@ func (r *Runner) RunRestore(restorePoint db.RestorePoint, targets []RestoreTarge
 			"items_done":       itemsDone,
 			"items_failed":     itemsFailed,
 			"items_total":      len(targets),
-			"size_bytes":       restorePoint.SizeBytes,
+			"size_bytes":       restoredSize,
 			"duration_seconds": int(time.Since(restoreStart).Seconds()),
 		}))
 }

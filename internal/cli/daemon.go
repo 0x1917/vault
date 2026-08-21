@@ -540,6 +540,12 @@ var daemonCmd = &cobra.Command{
 			srv.Runner().RunScheduledVerify(jobID, mode)
 		})
 
+		// Per-job scheduled full backups for incremental/differential jobs
+		// (issue #322).
+		sched.SetFullRunner(func(jobID int64) {
+			srv.Runner().RunJobFull(jobID)
+		})
+
 		// Retry watcher dispatcher (Task 8): polls job_runs.retry_next_at
 		// every minute, atomically claims expired rows, and fires retries.
 		sched.SetRetryDispatcher(func(jobID, originalRunID int64, attempt int) {

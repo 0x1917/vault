@@ -50,3 +50,31 @@ func TestJobEnumsMatchConfigConstants(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateJobEnumContainerScope pins the container_scope allow-list to the
+// two selection modes the runner understands (#324): "all" (every live
+// container, reconciled per run) and "custom" (explicit selection). Without
+// this entry a job saved with the new wizard option would be rejected.
+func TestValidateJobEnumContainerScope(t *testing.T) {
+	cases := []struct {
+		value   string
+		wantErr bool
+	}{
+		{"all", false},
+		{"custom", false},
+		{"", false}, // omitted — the runner treats non-"all" as custom
+		{"nonsense", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.value, func(t *testing.T) {
+			err := validateJobEnum("container_scope", tc.value)
+			if tc.wantErr && err == nil {
+				t.Fatalf("validateJobEnum(container_scope, %q) = nil, want error", tc.value)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("validateJobEnum(container_scope, %q) = %v, want nil", tc.value, err)
+			}
+		})
+	}
+}

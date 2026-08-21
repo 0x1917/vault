@@ -225,10 +225,11 @@ var jobEnums = map[string][]string{
 	// the runner's batch path, and the value BackupModeSelector.svelte submits.
 	// This list said "all_at_once", so saving a job in Batch mode was rejected
 	// (issue #261).
-	"container_mode": {"one_by_one", "stop_all"},
-	"vm_mode":        {"snapshot", "cold"},
-	"verify_mode":    {"quick", "deep"},
-	"notify_on":      {"always", "failure", "never"},
+	"container_mode":  {"one_by_one", "stop_all"},
+	"container_scope": {"all", "custom"},
+	"vm_mode":         {"snapshot", "cold"},
+	"verify_mode":     {"quick", "deep"},
+	"notify_on":       {"always", "failure", "never"},
 }
 
 // validateJobEnum reports whether value is allowed for field. An empty value is
@@ -273,6 +274,7 @@ func validateJobInput(w http.ResponseWriter, job *db.Job) bool {
 		"compression":       job.Compression,
 		"encryption":        job.Encryption,
 		"container_mode":    job.ContainerMode,
+		"container_scope":   job.ContainerScope,
 		"vm_mode":           job.VMMode,
 		"verify_mode":       job.VerifyMode,
 		"notify_on":         job.NotifyOn,

@@ -7,18 +7,24 @@ import (
 )
 
 type Job struct {
-	ID                int64  `json:"id"`
-	Name              string `json:"name"`
-	Description       string `json:"description"`
-	Enabled           bool   `json:"enabled"`
-	Schedule          string `json:"schedule"`
-	BackupTypeChain   string `json:"backup_type_chain"`
-	RetentionCount    int    `json:"retention_count"`
-	RetentionDays     int    `json:"retention_days"`
-	Compression       string `json:"compression"`
-	CompressionLevel  string `json:"compression_level"`
-	Encryption        string `json:"encryption"`
-	ContainerMode     string `json:"container_mode"`
+	ID               int64  `json:"id"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	Enabled          bool   `json:"enabled"`
+	Schedule         string `json:"schedule"`
+	BackupTypeChain  string `json:"backup_type_chain"`
+	RetentionCount   int    `json:"retention_count"`
+	RetentionDays    int    `json:"retention_days"`
+	Compression      string `json:"compression"`
+	CompressionLevel string `json:"compression_level"`
+	Encryption       string `json:"encryption"`
+	ContainerMode    string `json:"container_mode"`
+	// ContainerScope selects WHICH containers a job backs up: "all" (every
+	// live container, reconciled automatically each run) or "custom"
+	// (explicit job_items). Orthogonal to ContainerMode, which is HOW they
+	// are stopped/started (one_by_one / stop_all). Default "custom" preserves
+	// the historical explicit-selection behaviour (issue #324).
+	ContainerScope    string `json:"container_scope"`
 	VMMode            string `json:"vm_mode"`
 	PreScript         string `json:"pre_script"`
 	PostScript        string `json:"post_script"`

@@ -289,6 +289,10 @@ var alterMigrations = []string{
 	// of 3 from EffectiveUploadConcurrency (0 sentinel → 3).
 	"ALTER TABLE jobs ADD COLUMN max_parallel_uploads INTEGER DEFAULT 1",
 	"ALTER TABLE jobs ADD COLUMN adaptive_enabled INTEGER NOT NULL DEFAULT 0",
+	// Container selection scope (#324): "all" backs up every live container
+	// (reconciled per run); "custom" backs up only the explicit job_items.
+	// DEFAULT 'custom' keeps pre-existing jobs on explicit selection.
+	"ALTER TABLE jobs ADD COLUMN container_scope TEXT NOT NULL DEFAULT 'custom'",
 	// Stale-item remediation (#119). missing_since is set (RFC3339) when a
 	// backup run detects the item no longer exists on the system; NULL means
 	// present/healthy. Never auto-removed — the user clears it by removing

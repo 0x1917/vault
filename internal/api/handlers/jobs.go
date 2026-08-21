@@ -48,6 +48,23 @@ func dedupManifestToTarIndex(itemName string, m dedup.Manifest) engine.TarIndex 
 	return idx
 }
 
+// respondIndex writes idx either as the full flat list (legacy, no `dir`
+// param) or as a lazy per-directory view (when `dir` is present — any value,
+// including the empty string meaning the archive root).
+func respondIndex(w http.ResponseWriter, r *http.Request, idx engine.TarIndex) {
+	if r.URL.Query().Has("dir") {
+		files, dirs := idx.Counts()
+		respondJSON(w, http.StatusOK, engine.TarIndexDir{
+			Dir:        strings.TrimSpace(r.URL.Query().Get("dir")),
+			Entries:    idx.DirChildren(r.URL.Query().Get("dir")),
+			TotalFiles: files,
+			TotalDirs:  dirs,
+		})
+		return
+	}
+	respondJSON(w, http.StatusOK, idx)
+}
+
 // ScheduleReloader is called after job CRUD to reload the cron scheduler.
 type ScheduleReloader = func() error
 
@@ -809,7 +826,7 @@ func (h *JobHandler) RestorePointContents(w http.ResponseWriter, r *http.Request
 			respondInternalError(w, err)
 			return
 		}
-		respondJSON(w, http.StatusOK, dedupManifestToTarIndex(itemName, manifest))
+		respondIndex(w, r, dedupManifestToTarIndex(itemName, manifest))
 		return
 	}
 
@@ -826,7 +843,7 @@ func (h *JobHandler) RestorePointContents(w http.ResponseWriter, r *http.Request
 			respondError(w, http.StatusNotFound, "restore chain is incomplete; file browsing is unavailable for this restore point")
 			return
 		}
-		h.respondMergedChainContents(w, chain, dest, itemName, archiveName)
+		h.respondMergedChainContents(w, r, chain, dest, itemName, archiveName)
 		return
 	}
 
@@ -892,7 +909,7 @@ func (h *JobHandler) RestorePointContents(w http.ResponseWriter, r *http.Request
 		respondInternalError(w, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, idx)
+	respondIndex(w, r, idx)
 }
 
 // errIndexEncryptedNoPassphrase marks a chain-step index that cannot be read
@@ -906,7 +923,7 @@ var errIndexEncryptedNoPassphrase = errors.New("index is encrypted but no passph
 // conclusively shows the item was not captured by that step; a missing or
 // unreadable index otherwise fails the request (fail closed) so the wizard
 // falls back to whole-item restore instead of presenting a partial file list.
-func (h *JobHandler) respondMergedChainContents(w http.ResponseWriter, chain []db.RestorePoint, dest db.StorageDestination, itemName, archiveName string) {
+func (h *JobHandler) respondMergedChainContents(w http.ResponseWriter, r *http.Request, chain []db.RestorePoint, dest db.StorageDestination, itemName, archiveName string) {
 	var adapter storage.Adapter
 	getAdapter := func() (storage.Adapter, error) {
 		if adapter == nil {
@@ -977,7 +994,7 @@ func (h *JobHandler) respondMergedChainContents(w http.ResponseWriter, chain []d
 		files = append(files, f)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	respondJSON(w, http.StatusOK, engine.TarIndex{Version: 1, Archive: itemName, Files: files})
+	respondIndex(w, r, engine.TarIndex{Version: 1, Archive: itemName, Files: files})
 }
 
 // itemIndexForPoint fetches one restore point's index for an item: the dedup
@@ -1473,6 +1490,11 @@ func (h *JobHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		// tar entry paths chosen from the index sidecar. Items absent
 		// from this map (or with an empty slice) restore everything.
 		FilePaths map[string][]string `json:"file_paths"`
+		// ExcludePaths is the optional per-item exclude-list used by the
+		// default-selected file tree. Keys are item names; values are tar
+		// entry paths to skip (and their descendants). Items absent from
+		// this map restore everything.
+		ExcludePaths map[string][]string `json:"exclude_paths"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid JSON")
@@ -1572,9 +1594,10 @@ func (h *JobHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	runnerTargets := make([]runner.RestoreTarget, 0, len(targets))
 	for _, t := range targets {
 		runnerTargets = append(runnerTargets, runner.RestoreTarget{
-			Name:      t.Name,
-			Type:      t.Type,
-			FilePaths: req.FilePaths[t.Name],
+			Name:         t.Name,
+			Type:         t.Type,
+			FilePaths:    req.FilePaths[t.Name],
+			ExcludePaths: req.ExcludePaths[t.Name],
 		})
 	}
 

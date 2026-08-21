@@ -151,3 +151,73 @@ func TestRestorePointContents_AgeSidecarWithoutPassphrase(t *testing.T) {
 		t.Fatalf("status = %d, want 424; body: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestRestorePointContents_DirParamReturnsChildren(t *testing.T) {
+	t.Parallel()
+	h, d := newJobHandlerDB(t)
+
+	storageRoot := t.TempDir()
+	cfg, _ := json.Marshal(map[string]string{"path": storageRoot})
+	destID, err := d.CreateStorageDestination(db.StorageDestination{Name: "rpc-dir-" + nextUnique(), Type: "local", Config: string(cfg)})
+	if err != nil {
+		t.Fatalf("create dest: %v", err)
+	}
+	jobID, err := d.CreateJob(db.Job{Name: "rpc-dir-job-" + nextUnique(), StorageDestID: destID})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	runID, err := d.CreateJobRun(db.JobRun{JobID: jobID, Status: "success"})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	rpID, err := d.CreateRestorePoint(db.RestorePoint{JobRunID: runID, JobID: jobID, BackupType: "full", StoragePath: "rp-dir", Metadata: "{}"})
+	if err != nil {
+		t.Fatalf("create rp: %v", err)
+	}
+
+	itemDir := filepath.Join(storageRoot, "rp-dir", "fooitem")
+	if err := os.MkdirAll(itemDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	idx := engine.TarIndex{Version: 1, Archive: "backup.tar", Files: []engine.TarIndexEntry{
+		{Path: "app", IsDir: true},
+		{Path: "app/main.py", Size: 10, Mode: "0644", ModTime: "2026-01-01T00:00:00Z"},
+		{Path: "app/lib", IsDir: true},
+		{Path: "app/lib/util.py", Size: 20, Mode: "0644", ModTime: "2026-01-01T00:00:00Z"},
+		{Path: "README.md", Size: 5, Mode: "0644", ModTime: "2026-01-01T00:00:00Z"},
+	}}
+	b, _ := json.Marshal(idx)
+	if err := os.WriteFile(filepath.Join(itemDir, "backup.tar"+engine.IndexSuffix), b, 0o644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+
+	url := fmt.Sprintf("/api/v1/jobs/%d/restore-points/%d/contents?item=fooitem&dir=app", jobID, rpID)
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req = withURLParams(req, "id", strconv.FormatInt(jobID, 10), "rpid", strconv.FormatInt(rpID, 10))
+	w := httptest.NewRecorder()
+	h.RestorePointContents(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var got engine.TarIndexDir
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode resp: %v", err)
+	}
+	if got.Dir != "app" {
+		t.Errorf("dir = %q, want app", got.Dir)
+	}
+	if len(got.Entries) != 2 {
+		t.Fatalf("entries = %+v, want 2 children of app", got.Entries)
+	}
+	paths := map[string]bool{}
+	for _, e := range got.Entries {
+		paths[e.Path] = true
+	}
+	if !paths["app/main.py"] || !paths["app/lib"] {
+		t.Errorf("entries = %+v, want app/main.py and app/lib", got.Entries)
+	}
+	if got.TotalFiles != 3 || got.TotalDirs != 2 {
+		t.Errorf("totals = (%d files, %d dirs), want (3, 2)", got.TotalFiles, got.TotalDirs)
+	}
+}

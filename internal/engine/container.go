@@ -2689,17 +2689,20 @@ func untarDirectory(ctx context.Context, srcPath, destDir string) error {
 }
 
 // untarDirectoryFiltered behaves like untarDirectory but only extracts the
-// tar entries whose Name is present in the include set. Any entry whose path
-// is the descendant of an included directory is also extracted. The empty
-// set restores every entry (caller passes nil for "extract everything").
-//
-// This is the v1 partial-restore path: callers supply file paths chosen
-// from the engine's tar index sidecar (see WriteTarIndex). Compatible with
-// every archive — encrypted/compressed/plain — because filtering happens
-// after the existing decryption + decompression pipeline that the runner
-// has already staged.
+// tar entries whose Name is present in the include set. The empty set
+// restores every entry. Kept as the legacy single-filter entry point; the
+// exclusion-aware variant is untarDirectoryFilteredEx.
 func untarDirectoryFiltered(ctx context.Context, srcPath, destDir string, include []string) error {
+	return untarDirectoryFilteredEx(ctx, srcPath, destDir, include, nil)
+}
+
+// untarDirectoryFilteredEx behaves like untarDirectoryFiltered but also
+// skips entries (and their descendants) named in the exclude set. An empty
+// exclude set skips nothing. See untarDirectoryFiltered for the include-set
+// semantics.
+func untarDirectoryFilteredEx(ctx context.Context, srcPath, destDir string, include, exclude []string) error {
 	includeSet := newIncludeSet(include)
+	excludeSet := newExcludeSet(exclude)
 	inFile, err := os.Open(srcPath) // #nosec G304 — srcPath is sourceDir + fixed archive name, caller-controlled
 	if err != nil {
 		return fmt.Errorf("opening archive: %w", err)
@@ -2726,7 +2729,7 @@ func untarDirectoryFiltered(ctx context.Context, srcPath, destDir string, includ
 			return fmt.Errorf("reading tar entry: %w", err)
 		}
 
-		if !includeSet.matches(header.Name) {
+		if !includeSet.matches(header.Name) || excludeSet.matches(header.Name) {
 			continue
 		}
 

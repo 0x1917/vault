@@ -492,6 +492,29 @@ func extractRestoreFilePaths(settings map[string]any) []string {
 	return nil
 }
 
+// extractRestoreExcludePaths reads the "restore_exclude_paths" setting
+// injected by the runner from the API and returns it as a []string. Same
+// shape rules as extractRestoreFilePaths; nil when absent.
+func extractRestoreExcludePaths(settings map[string]any) []string {
+	raw, ok := settings["restore_exclude_paths"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // extractExcludePaths reads the "exclude_paths" setting and returns it as a
 // []string. The setting can arrive as []string (delegated from
 // ContainerHandler.BackupChunked, which maps container-side exclusions to

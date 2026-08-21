@@ -114,3 +114,28 @@ func TestExtractExcludePaths(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractRestoreExcludePaths(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		settings map[string]any
+		want     []string
+	}{
+		{"nil settings", nil, nil},
+		{"absent key", map[string]any{}, nil},
+		{"explicit nil", map[string]any{"restore_exclude_paths": nil}, nil},
+		{"typed slice", map[string]any{"restore_exclude_paths": []string{"a/b", "c"}}, []string{"a/b", "c"}},
+		{"any slice drops empties", map[string]any{"restore_exclude_paths": []any{"a", "", "b", 42}}, []string{"a", "b"}},
+		{"wrong type", map[string]any{"restore_exclude_paths": "x"}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractRestoreExcludePaths(tc.settings)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("extractRestoreExcludePaths(%v) = %v, want %v", tc.settings, got, tc.want)
+			}
+		})
+	}
+}

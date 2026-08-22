@@ -1976,6 +1976,60 @@ func (h *ContainerHandler) BackupChunked(ctx context.Context, item BackupItem, r
 				m.Files[key] = dedup.ManifestEntry{Size: volumeSkippedSize}
 				continue
 			}
+			// Detect file-based bind mounts and non-regular inodes (parity with the
+			// classic Backup path, which Lstats mount.Source and branches on the
+			// result). Without this, a file mount is handed to
+			// FolderHandler.BackupChunked → os.OpenRoot, which fails on a
+			// non-directory, and sockets/devices — skipped cleanly by the classic
+			// path — abort a dedup run.
+			srcInfo, lerr := os.Lstat(mnt.Source)
+			if lerr != nil {
+				return fmt.Errorf("stat volume %s: %w", mnt.Source, lerr)
+			}
+			if !srcInfo.IsDir() {
+				// Auto-skip non-regular inodes (sockets, named pipes, devices,
+				// irregular) — matching the classic path's skip at Backup.
+				if srcInfo.Mode()&(os.ModeSocket|os.ModeNamedPipe|os.ModeDevice|os.ModeCharDevice|os.ModeIrregular) != 0 {
+					reason := fmt.Sprintf("unsupported inode type (%s)", srcInfo.Mode().Type().String())
+					log.Printf("engine: chunked: skipping volume %s for %s: %s", mnt.Source, item.Name, reason)
+					m.Files[key] = dedup.ManifestEntry{Size: volumeSkippedSize}
+					continue
+				}
+				// Regular-file bind mount. Differential runs: skip an unchanged
+				// file (carry the parent entry forward), exactly like the
+				// directory path below. pathChangedSince handles non-directories.
+				if hasChangedSince {
+					changed, cached := volChanges[mnt.Source]
+					if !cached {
+						var cerr error
+						changed, cerr = pathChangedSince(ctx, mnt.Source, changedSince)
+						if cerr != nil {
+							return fmt.Errorf("checking volume %s changes: %w", mnt.Source, cerr)
+						}
+					}
+					if !changed {
+						log.Printf("engine: chunked: file mount %s for %s unchanged since reference — carrying forward parent entry", mnt.Source, item.Name)
+						if parent != nil {
+							if pe, ok := parent.Files[key]; ok {
+								m.Files[key] = pe
+								continue
+							}
+						}
+						// No parent entry to carry forward from (e.g. a full backup
+						// with changed_since set, or a parent missing this volume):
+						// fall through and chunk the file fully (issue #320).
+					}
+				}
+				entry, ferr := chunkFileIntoRepo(repo, mnt.Source)
+				if ferr != nil {
+					return fmt.Errorf("chunking file mount %s: %w", mnt.Source, ferr)
+				}
+				entry.IsFile = true
+				entry.Mode = uint32(srcInfo.Mode().Perm())
+				entry.ModTime = srcInfo.ModTime().UTC().Format(time.RFC3339)
+				m.Files[key] = entry
+				continue
+			}
 			// For differential backups, skip volumes whose entire tree is
 			// unchanged since the reference time. Mirrors the classic Backup
 			// path. Reuses cached pre-check results when available. With a
@@ -2237,6 +2291,44 @@ func (h *ContainerHandler) RestoreChunked(ctx context.Context, item BackupItem, 
 	return nil
 }
 
+// restoreChunkedFileMount reconstructs a single-file volume at destPath by
+// concatenating the entry's chunks in order. Mirrors the per-file write in
+// FolderHandler.RestoreChunked but targets the whole file mount directly (no
+// leaf MkdirAll), and honours the recorded mode + mtime like the classic
+// untarFile path. Used by restoreChunkedVolumes for single-file bind mounts.
+func restoreChunkedFileMount(ctx context.Context, repo *dedup.Repo, entry dedup.ManifestEntry, destPath string) error {
+	mode := os.FileMode(entry.Mode)
+	if mode == 0 {
+		mode = 0o644
+	}
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode) // #nosec G304 — destPath is validated by the caller's normalizeRestorePath
+	if err != nil {
+		return err
+	}
+	for _, cid := range entry.Chunks {
+		if err := ctx.Err(); err != nil {
+			_ = out.Close()
+			return err
+		}
+		body, err := repo.Get(cid)
+		if err != nil {
+			_ = out.Close()
+			return fmt.Errorf("restore file mount chunk: %w", err)
+		}
+		if _, err := out.Write(body); err != nil {
+			_ = out.Close()
+			return err
+		}
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if t, err := time.Parse(time.RFC3339, entry.ModTime); err == nil {
+		_ = os.Chtimes(destPath, t, t)
+	}
+	return nil
+}
+
 // restoreChunkedVolumes restores each __vol__<dest> sub-manifest entry in m
 // to its target directory: the original bind/volume source when restoreDest
 // is empty, or restoreDest/<volume-name> when a custom destination is set
@@ -2267,7 +2359,9 @@ func restoreChunkedVolumes(ctx context.Context, m dedup.Manifest, repo *dedup.Re
 			log.Printf("engine: chunked restore: %s was skipped at backup time, nothing to restore", k)
 			continue
 		}
-		if len(v.Chunks) == 0 {
+		// An empty-chunks directory entry is malformed; an empty-chunks FILE
+		// entry is a valid zero-byte file mount, so only skip the former here.
+		if !v.IsFile && len(v.Chunks) == 0 {
 			log.Printf("engine: chunked restore: %s has no chunks, skipping", k)
 			continue
 		}
@@ -2285,12 +2379,24 @@ func restoreChunkedVolumes(ctx context.Context, m dedup.Manifest, repo *dedup.Re
 		if err != nil {
 			return fmt.Errorf("restore volume %s: %w", dest, err)
 		}
-		src = normalizedSrc
-		if err := os.MkdirAll(src, 0o750); err != nil {
-			return fmt.Errorf("mkdir volume %s: %w", src, err)
+		if v.IsFile {
+			// Single-file bind mount: write the chunks to ONE file at the
+			// target (creating the parent dir first), mirroring classic
+			// Restore's untarFile branch. clean_destination does NOT apply —
+			// classic file mounts are not cleared either.
+			if err := os.MkdirAll(filepath.Dir(normalizedSrc), 0o750); err != nil {
+				return fmt.Errorf("mkdir parent for %s: %w", normalizedSrc, err)
+			}
+			if err := restoreChunkedFileMount(ctx, repo, v, normalizedSrc); err != nil {
+				return fmt.Errorf("restore file mount %s: %w", dest, err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(normalizedSrc, 0o750); err != nil {
+			return fmt.Errorf("mkdir volume %s: %w", normalizedSrc, err)
 		}
 		proxy := BackupItem{Name: dest, Type: "folder"}
-		if err := fh.RestoreChunked(ctx, proxy, repo, v.Chunks[0], src, progress); err != nil {
+		if err := fh.RestoreChunked(ctx, proxy, repo, v.Chunks[0], normalizedSrc, progress); err != nil {
 			return fmt.Errorf("restore volume %s: %w", dest, err)
 		}
 	}

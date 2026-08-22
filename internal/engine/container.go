@@ -2,6 +2,7 @@ package engine
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2025,6 +2026,10 @@ func (h *ContainerHandler) BackupChunked(ctx context.Context, item BackupItem, r
 					return fmt.Errorf("chunking file mount %s: %w", mnt.Source, ferr)
 				}
 				entry.IsFile = true
+				// Narrow the recorded mode to the permission bits (0777). The
+				// classic path's safeFileMode preserves 0o7777, but deliberately
+				// NOT resurrecting setuid/setgid/sticky bits on restore is the
+				// safer choice for a file mount.
 				entry.Mode = uint32(srcInfo.Mode().Perm())
 				entry.ModTime = srcInfo.ModTime().UTC().Format(time.RFC3339)
 				m.Files[key] = entry
@@ -2274,7 +2279,7 @@ func (h *ContainerHandler) RestoreChunked(ctx context.Context, item BackupItem, 
 	//    database dump) as sourceDir so the shared helper restores the
 	//    template and reloads the dump exactly as for a classic backup.
 	//    image_meta seeding was already handled from the manifest entry above.
-	sidecarDir, cleanupSidecars, err := writeChunkedRestoreSidecars(repo, m)
+	sidecarDir, cleanupSidecars, err := writeChunkedRestoreSidecars(ctx, repo, m)
 	if err != nil {
 		return err
 	}
@@ -2315,7 +2320,7 @@ func restoreChunkedFileMount(ctx context.Context, repo *dedup.Repo, entry dedup.
 			_ = out.Close()
 			return fmt.Errorf("restore file mount chunk: %w", err)
 		}
-		if _, err := out.Write(body); err != nil {
+		if _, err := contextCopy(ctx, out, bytes.NewReader(body)); err != nil {
 			_ = out.Close()
 			return err
 		}
@@ -2409,7 +2414,7 @@ func restoreChunkedVolumes(ctx context.Context, m dedup.Manifest, repo *dedup.Re
 // like a classic backup's source directory, so the shared restore path
 // (recreateAndStartContainer) finds them with no special-casing. Returns an
 // empty path and a nil cleanup when the manifest carries none of them.
-func writeChunkedRestoreSidecars(repo *dedup.Repo, m dedup.Manifest) (string, func(), error) {
+func writeChunkedRestoreSidecars(ctx context.Context, repo *dedup.Repo, m dedup.Manifest) (string, func(), error) {
 	dumpEntry, hasDump := m.Files[ContainerDBDumpKey]
 	_, hasReplay := m.Files[ContainerDBReplayKey]
 	templateEntry, hasTemplate := m.Files[containerTemplateKey]
@@ -2433,7 +2438,7 @@ func writeChunkedRestoreSidecars(repo *dedup.Repo, m dedup.Manifest) (string, fu
 	// Stored uncompressed by the chunked backup, so the dump is written back
 	// under the bare name; findDatabaseDump accepts either form.
 	if hasDump && len(dumpEntry.Chunks) > 0 {
-		if err := writeChunkedEntryToFile(repo, dumpEntry, filepath.Join(dir, DatabaseDumpFile)); err != nil {
+		if err := writeChunkedEntryToFile(ctx, repo, dumpEntry, filepath.Join(dir, DatabaseDumpFile)); err != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("writing database dump: %w", err)
 		}
@@ -2442,7 +2447,7 @@ func writeChunkedRestoreSidecars(repo *dedup.Repo, m dedup.Manifest) (string, fu
 	// (step 5) writes it back to the well-known templates-user location,
 	// exactly as it does for a classic restore.
 	if hasTemplate && len(templateEntry.Chunks) > 0 {
-		if err := writeChunkedEntryToFile(repo, templateEntry, filepath.Join(dir, "template.xml")); err != nil {
+		if err := writeChunkedEntryToFile(ctx, repo, templateEntry, filepath.Join(dir, "template.xml")); err != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("writing template xml: %w", err)
 		}
@@ -2452,7 +2457,7 @@ func writeChunkedRestoreSidecars(repo *dedup.Repo, m dedup.Manifest) (string, fu
 
 // writeChunkedEntryToFile concatenates an entry's chunks in order into a
 // single file at path. Shared by the dump and template materialisation.
-func writeChunkedEntryToFile(repo *dedup.Repo, entry dedup.ManifestEntry, path string) error {
+func writeChunkedEntryToFile(ctx context.Context, repo *dedup.Repo, entry dedup.ManifestEntry, path string) error {
 	f, err := os.Create(path) // #nosec G304 — path is inside a vault-created temp directory
 	if err != nil {
 		return err
@@ -2463,7 +2468,7 @@ func writeChunkedEntryToFile(repo *dedup.Repo, entry dedup.ManifestEntry, path s
 			_ = f.Close()
 			return err
 		}
-		if _, err := f.Write(chunk); err != nil {
+		if _, err := contextCopy(ctx, f, bytes.NewReader(chunk)); err != nil {
 			_ = f.Close()
 			return err
 		}

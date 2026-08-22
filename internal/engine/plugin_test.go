@@ -273,14 +273,11 @@ func TestPluginRestoreHonoursDestination(t *testing.T) {
 	configBody := []byte("x=1")
 
 	cases := []struct {
-		name             string
-		customDest       bool
-		cleanDestination bool
-		seedDestStale    bool
+		name       string
+		customDest bool
 	}{
 		{name: "custom destination routes config and keeps plg at well-known", customDest: true},
 		{name: "unset destination falls back to well-known dir", customDest: false},
-		{name: "clean_destination clears the custom destination", customDest: true, cleanDestination: true, seedDestStale: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -313,19 +310,10 @@ func TestPluginRestoreHonoursDestination(t *testing.T) {
 			if tc.customDest {
 				dest := t.TempDir()
 				wantConfigDir = dest
-				if tc.seedDestStale {
-					if err := os.WriteFile(filepath.Join(dest, "stale.txt"), []byte("stale"), 0o644); err != nil {
-						t.Fatal(err)
-					}
-				}
 				settings["restore_destination"] = dest
 			} else {
 				wantConfigDir = filepath.Join(base, pluginName)
 			}
-			if tc.cleanDestination {
-				settings["clean_destination"] = true
-			}
-
 			h := &PluginHandler{}
 			item := BackupItem{Name: pluginName, Type: "plugin", Settings: settings}
 			if err := h.Restore(context.Background(), item, sourceDir, func(string, int, string) {}); err != nil {
@@ -352,11 +340,59 @@ func TestPluginRestoreHonoursDestination(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(base, pluginName, "config.toml")); !os.IsNotExist(err) {
 					t.Errorf("config must not be written to the well-known dir when restore_destination is set (err=%v)", err)
 				}
-				if tc.seedDestStale {
-					if _, err := os.Stat(filepath.Join(wantConfigDir, "stale.txt")); !os.IsNotExist(err) {
-						t.Errorf("stale.txt should have been cleared from the custom destination (err=%v)", err)
-					}
-				}
+			}
+		})
+	}
+}
+
+// TestPluginRestoreRejectsInvalidDestination is a regression test for #321:
+// the classic (non-dedup) PluginHandler.Restore resolves+validates a custom
+// restore_destination BEFORE writing the .plg installer, so an invalid
+// destination errors without leaving partial state (no .plg on disk).
+func TestPluginRestoreRejectsInvalidDestination(t *testing.T) {
+	const pluginName = "test-plugin"
+	plgBody := []byte(`<?xml version="1.0"?><PLUGIN name="test-plugin"></PLUGIN>`)
+
+	cases := []struct {
+		name string
+		dest string
+	}{
+		{name: "destination_outside_approved_roots", dest: "/dev/null"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Redirect the well-known plugins dir (package var) so the .plg
+			// installer would land under a tempdir. Do NOT call t.Parallel:
+			// pluginsDir is a package-level var.
+			base := t.TempDir()
+			orig := pluginsDir
+			pluginsDir = base
+			t.Cleanup(func() { pluginsDir = orig })
+
+			// Stage a classic plugin backup: installer plus a config.tar.
+			sourceDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(sourceDir, pluginName+".plg"), plgBody, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfgSrc := t.TempDir()
+			if err := os.WriteFile(filepath.Join(cfgSrc, "config.toml"), []byte("x=1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := tarDirectory(context.Background(), cfgSrc, filepath.Join(sourceDir, "config.tar"), nil, CompressionNone); err != nil {
+				t.Fatal(err)
+			}
+
+			h := &PluginHandler{}
+			item := BackupItem{Name: pluginName, Type: "plugin", Settings: map[string]any{"restore_destination": tc.dest}}
+			err := h.Restore(context.Background(), item, sourceDir, func(string, int, string) {})
+			if err == nil {
+				t.Fatal("Restore() expected error for invalid restore_destination, got nil")
+			}
+
+			// The .plg installer must NOT have been written: the invalid
+			// destination is rejected before any side effect.
+			if _, statErr := os.Stat(filepath.Join(base, pluginName+".plg")); !os.IsNotExist(statErr) {
+				t.Errorf(".plg was written despite the invalid restore_destination (partial state)")
 			}
 		})
 	}

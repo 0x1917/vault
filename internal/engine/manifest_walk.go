@@ -57,8 +57,12 @@ func WalkManifestClosure(repo *dedup.Repo, tops []dedup.ID) (manifests, data []d
 				}
 				// A __vol__ entry's chunk is expected to be a sub-manifest.
 				// Confirm by decoding before recursing so a pathological data
-				// chunk under such a key can't derail the walk.
-				if isVol {
+				// chunk under such a key can't derail the walk. A file-mount
+				// (IsFile) entry is the exception: its chunks are the file's own
+				// DATA chunks, not a sub-manifest ID, so probing GetManifest on
+				// them would be a wasted remote fetch — treat them as data
+				// directly and fall through.
+				if isVol && !entry.IsFile {
 					if _, derr := repo.GetManifest(c); derr == nil {
 						if werr := walk(c); werr != nil {
 							return werr

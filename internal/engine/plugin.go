@@ -174,6 +174,20 @@ func (h *PluginHandler) Restore(ctx context.Context, item BackupItem, sourceDir 
 	}
 	pluginName = safePluginName
 
+	// Resolve + validate a custom restore destination (if set) up front, so
+	// an invalid destination errors BEFORE any side effect — previously it was
+	// validated in Step 2 after the .plg installer was already on disk,
+	// leaving partial state on failure. The resolved value is applied in
+	// Step 2 so valid destinations restore exactly as before.
+	var configDirOverride string
+	if rd, _ := item.Settings["restore_destination"].(string); rd != "" {
+		normalized, err := normalizeRestorePath(rd)
+		if err != nil {
+			return err
+		}
+		configDirOverride = normalized
+	}
+
 	// Step 1: Restore the .plg file.
 	progress(item.Name, 30, "restoring plugin file")
 	plgSrc := filepath.Join(sourceDir, pluginName+".plg")
@@ -194,12 +208,8 @@ func (h *PluginHandler) Restore(ctx context.Context, item BackupItem, sourceDir 
 		// the archive contents land directly inside it. Falls back to the
 		// well-known /boot/config/plugins/<name>/ directory when unset.
 		configDir := pluginPath(pluginName)
-		if rd, _ := item.Settings["restore_destination"].(string); rd != "" {
-			normalized, err := normalizeRestorePath(rd)
-			if err != nil {
-				return err
-			}
-			configDir = normalized
+		if configDirOverride != "" {
+			configDir = configDirOverride
 		}
 		if err := os.MkdirAll(configDir, 0755); err != nil {
 			return fmt.Errorf("creating config dir: %w", err)

@@ -35,8 +35,14 @@ type ManifestEntry struct {
 	ModTime string `json:"modtime"` // RFC3339
 	Size    int64  `json:"size"`
 	IsDir   bool   `json:"is_dir,omitempty"`
-	IsFile  bool   `json:"is_file,omitempty"`
-	Chunks  []ID   `json:"chunks,omitempty"`
+	// IsFile is a forward-incompatible ADDITIVE field: an older reader that
+	// predates it decodes is_file as absent and will mis-restore a file-mount
+	// entry as a directory (MkdirAll then RestoreChunked on a data chunk).
+	// ManifestVersion is deliberately NOT bumped for it — read-side version
+	// enforcement is unimplemented (see the ManifestVersion read-enforcement
+	// gap), so a bump would be cosmetic only.
+	IsFile bool `json:"is_file,omitempty"`
+	Chunks []ID `json:"chunks,omitempty"`
 }
 
 // EncodeJSON returns the canonical JSON form. Stored as a chunk via

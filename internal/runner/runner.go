@@ -2350,6 +2350,9 @@ func (r *Runner) backupItemChunked(ctx context.Context, item engine.BackupItem, 
 	// no files, so the manifest ID stands in as the item's content reference).
 	var checksums map[string]string
 	if verify {
+		// The value is a hex-encoded manifest ID — the item's dedup identity
+		// reference — NOT a SHA-256 content hash like the classic path's
+		// per-file checksums that share this map.
 		checksums = map[string]string{"__manifest:" + item.Name: hex.EncodeToString(manifestID[:])}
 	}
 	return result, checksums, nil
